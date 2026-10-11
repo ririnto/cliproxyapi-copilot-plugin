@@ -73,8 +73,24 @@ The maintained driver and oracle now ask for the fixture's red top and blue bott
 The earlier left/right prompt was inconsistent with the actual PNG; a regression decodes its pixels and rejects wrong colors or orientation.
 That harness correction does not change the retained client rejection or establish a provider URL-reference pass.
 
+A separate original Claude Code 2.1.296 structured-stdin case sent the same HTTPS URL to exact `claude-haiku-5.5` on native `/v1/messages`.
+The original and public image blocks were identical; the driver neither fetched the image nor substituted inline bytes.
+Copilot returned HTTP 400 with `external image URLs are not supported`, and the original client received the corresponding HTTP 400 error.
+This is a captured provider rejection for the URL-only Messages profile, distinct from Codex's client rejection.
+Claude's URL source cannot express independent MIME or image-detail values, so this case does not satisfy that broader carrier requirement.
+The first harness attempt used a duplicated `/v1/v1/messages` path and returned CPA 404 with zero provider inference; it remains separate from the corrected native-origin attempt.
+The corrected attempt made one provider inference; automatic subsequent client retries were denied locally, then turn interruption ended the run before a final CLI result was retained.
+The maintained harness now uses the Anthropic root origin, an unconditional loopback child sandbox, process-scoped `CLAUDE_CODE_MAX_RETRIES=0`, and streamed private stdout/stderr capture.
+It joins client request/response records by request ID and requires native Messages model, usage and terminal lifecycle before comparing text and actual fixture colors.
+No unchanged provider rejection was rerun after these harness-only corrections.
+
+The retained native GPT search profile with `tool_choice: required` already proves provider search and exact result/source/citation correlation for that distinct attempt.
+Current original Codex requests use `auto`; no supported original Codex control producing `required` was found.
+Its current automatic non-invocation remains a separate failure, pending a genuine changed client profile.
+
 This revalidation added eight inference dispatches and three authentication/catalogue startup pairs.
-The expanded physical ledger is 96 inference, 37 authentication and 33 catalogue dispatches, including failures.
+The expanded physical ledger is 97 inference, 39 authentication and 35 catalogue dispatches, including failures.
+The Claude URL carrier follow-up added one inference and two authentication/catalogue startup pairs.
 One public fixture preparation fetch is counted separately.
 The unchanged 18-cell matrix and existing attachment evidence remain valid because their requests do not activate the declared hosted-search barrier.
 See [hosted-tool current acceptance and remaining inputs](server-tool-acceptance.md#current-acceptance-2026-10-11).
@@ -411,3 +427,10 @@ Copy this source into the owned private execution directory with mode 0600 and s
 The driver reads the declared original binary, catalogue and loopback sandbox from the existing live environment variables.
 Its acceptance checks the actual RPC input and answer, original POST route, unchanged URL/detail/model/effort, complete public and client lifecycles, terminal text/usage, and exact image colors.
 Client rejection, missing ingress and transport or semantic failure remain failures.
+
+The original Claude URL-only case is opt-in with `CPA_LIVE_ORIGINAL_CLAUDE_HTTPS_IMAGE=1` and the existing packet environment.
+Set `CPA_LIVE_CLAUDE_BINARY`, `CPA_LIVE_CLAUDE_EXPECTED_VERSION`, and `CPA_LIVE_IMAGE_URL` to the existing original client and prepared public source.
+Run `go test ./integration -run '^TestLiveOriginalClaudeHTTPSImage$' -count=1 -v -timeout=0`.
+The child environment omits the retry watchdog and sets its retry count to zero; proxy retries remain independently governed by the existing host configuration.
+The test supplies a genuine newline-delimited user message on stdin and disables client tools, so neither the driver nor a Read tool prepares a substitute image.
+A rejected URL is retained as a failed profile, never an image pass.

@@ -443,6 +443,10 @@ func (g *liveServerToolGate) serveHTTP(writer http.ResponseWriter, request *http
 		g.writeLocalFailure(writer, request, body, "attachment_request_unprepared", http.StatusBadRequest)
 		return
 	}
+	if preparedCell == liveOriginalClaudeURLImageKey && request.URL.Path != "/copilot_internal/v2/token" && request.URL.Path != "/models" && (request.URL.Path != "/v1/messages" || !originalClaudeURLImageRequest(body, os.Getenv("CPA_LIVE_IMAGE_URL"))) {
+		g.writeLocalFailure(writer, request, body, "original_url_image_request_unprepared", http.StatusBadRequest)
+		return
+	}
 	category, phaseCell, origin, allowed := g.reserve(request.URL.Path)
 	if !allowed {
 		g.writeLocalFailure(writer, request, body, "gate_dispatch_denied", http.StatusTooManyRequests)

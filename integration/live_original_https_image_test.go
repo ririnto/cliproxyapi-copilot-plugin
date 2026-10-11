@@ -18,7 +18,9 @@ import (
 
 const liveOriginalHTTPSImageKey = "H-original-https/codex-image"
 
-func liveOriginalHTTPSImageCell(key string) bool { return key == liveOriginalHTTPSImageKey }
+func liveOriginalHTTPSImageCell(key string) bool {
+	return key == liveOriginalHTTPSImageKey || key == liveOriginalClaudeURLImageKey
+}
 
 // This case supplies an image URL to the original app-server; it never constructs
 // a provider image request or downloads the image on the client's behalf.

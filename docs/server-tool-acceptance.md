@@ -37,7 +37,8 @@ Five complete actual request/response pairs are retained in [portable regression
 Synthetic lifecycle mutations and native-host tests establish regression behavior separately from live provider capability.
 This follow-up made five inference dispatches and five authentication/catalogue startup pairs, including the continuation-only audit stopped before inference.
 A later current-stream original Codex revalidation added eight inference dispatches and three authentication/catalogue startup pairs.
-The expanded ledger now records 96 inference, 37 authentication and 33 catalogue dispatches.
+The expanded ledger now records 97 inference, 39 authentication and 35 catalogue dispatches.
+A separate original Claude URL carrier follow-up added one inference and two authentication/catalogue startup pairs.
 The separately counted public PNG preparation fetch is not inference.
 These counts are observations, not limits.
 
@@ -49,7 +50,13 @@ The same-thread follow-up used a new WebSocket with `previous_response_id: null`
 The current original native-search request includes the actual hosted declaration, but the model reports the tool unavailable without invoking it; this case fails despite HTTP 200 and a completed client turn.
 Its earlier PASS remains historical and does not overwrite the current failure.
 The original app-server HTTPS-image request is now a captured client rejection: JSON-RPC `-32600`, remote image URLs unsupported.
-It reaches neither CPA inference ingress nor Copilot inference, so provider URL-reference capability remains unknown.
+It reaches neither CPA inference ingress nor Copilot inference, so that Codex carrier does not establish provider URL-reference capability.
+A distinct original Claude structured-stdin URL carrier reached exact Haiku native Messages with its image block unchanged.
+Copilot returned HTTP 400 `external image URLs are not supported`; the client wire retained the corresponding 400 error.
+This is a URL-only profile rejection, since the original Messages URL source has no independent MIME/detail fields.
+The first duplicate-path harness 404 made zero inference; the corrected attempt made one, with later automatic retries denied locally before turn interruption.
+A complete final CLI result was not observed. The retained provider rejection is not retried unchanged.
+The maintained harness corrects the root origin, always applies the child sandbox, disables client retries, streams private output captures and validates joined client lifecycles.
 Required synthetic wire tests cover active and late control handling separately.
 
 The remaining citation and PNG answer failures are present in the actual provider bodies before bridge conversion.
@@ -59,7 +66,7 @@ The historical Read-cycle capture instead answers both red, while the native GPT
 No bridge-side output correction is justified by these captures.
 The original HTTPS harness did have a separate prompt/oracle defect: it asked for left/right colors on a red-top, blue-bottom fixture.
 The maintained prompt now uses top/bottom and its regression checks the actual PNG geometry.
-The original client rejection remains immutable and provider URL-reference acceptance remains NOTRUN.
+The Codex client rejection remains immutable. The separate Claude URL-only profile is now a provider rejection; broader URL/MIME/detail acceptance remains unmet.
 
 ## Remaining inputs and owners
 
@@ -71,9 +78,10 @@ Unchanged rejected profiles are retained without another speculative provider re
 | Cross-format hosted search and Bash SSE/history | Main needs a lossless destination representation and a ready original-client request preserving actual result ownership. |
 | Gemini search, Claude WebSearch/Web Fetch, GPT interpreter | Copilot capability owner must provide changed capability/profile evidence for the exact model and rejected declaration. |
 | Image generation, file search, hosted MCP and tool search | Main needs advertised exact-model capability and genuine files, servers or tool registry resources. |
-| Original HTTPS image references and remote uploads | The installed Codex app-server rejects remote URLs before inference. The original-client owner must supply a supported URL carrier; uploads still need authentic issuance and ownership. |
+| Original HTTPS image references and remote uploads | Codex rejects remote URLs before inference; genuine Claude URL-only stdin reaches Haiku Messages but Copilot rejects external URLs. Main needs a changed supported exact-model native profile preserving the required carrier fields. Uploads need authentic provider-owned issuance and lookup. |
 | Audio, video and office attachments | Main needs a supported original-client preparer and exact-model capability evidence. |
-| GPT PNG, original search refusal and tracked citation pairing | Copilot model behavior must produce the correct content or exactly correlated result citation under a substantively changed case. |
+| GPT PNG and tracked citation pairing | Copilot model behavior must produce the correct image content or exactly correlated result citation under a substantively changed case. |
+| Original Codex search non-invocation | A distinct retained native GPT `tool_choice: required` provider profile already passes. The original-client owner must provide a genuine Codex control or request that emits a changed supported profile; all current original requests use `auto`. |
 | Identity-neutral native HTTP headers | Main needs ownership release for the preserved provider WIP before changing its streaming `Accept` behavior. |
 | First-party Copilot session and executable-tool parity | Main needs an explicit authentic identity policy and genuine ACP/tool context unavailable from Claude/Codex inbound headers. |
 | Original-client interrupt wire emission | The original Codex client must emit the control frame before live wire acceptance can be established. |
