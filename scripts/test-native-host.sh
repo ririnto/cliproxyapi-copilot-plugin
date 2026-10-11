@@ -11,6 +11,7 @@ TEST_SELECTOR='^(TestNativeHostProtocolRoundTrips|TestNativeHostOAuth.*|TestFilt
 TEST_LIST_PATTERN='^(TestNativeHost|TestFilteredChildEnvironment)'
 REQUIRED_SEEDS='manifest.json auth.json legacy-auth.json model-catalog.json responses-request.json responses-history.json responses.json responses.sse chat.json chat.sse messages.json messages.sse responses-compaction.json responses-compaction.sse'
 REQUIRED_TESTS='TestNativeHostProtocolRoundTrips TestNativeHostOAuthContinuityPersistsAcrossRestart TestNativeHostOAuthExcludedModelsFilterPluginModels TestNativeHostOAuthSettingsOverrideCopilotModelContext TestFilteredChildEnvironment TestNativeHostCanonicalResponsesRouting TestNativeHostConfiguredCanonicalResponsesCompaction TestNativeHostPluginResponsesWebsocket TestNativeHostToolAndSystemCompatibility TestNativeHostClaudeUnsupportedServerToolGuards TestNativeHostPreservesIncompleteResponsesTerminal TestNativeHostResponseInterrupt TestNativeHostPayloadFinalization TestNativeHostPayloadFinalizationPreservesCodexReservedSchemas'
+HOSTED_SEED_DIRECTORY=internal/translate/testdata/native-hosted-tool-stream-captures/gpt-search-stream-before-repair
 
 if [ -z "$TARGET_GOOS" ] || [ -z "$TARGET_GOARCH" ]; then
   case "$(uname -s)" in
@@ -92,6 +93,7 @@ SEED_LIST="$TEMP_ROOT/seed-paths"
 mkdir -p \
   "$SNAPSHOT/config" \
   "$SNAPSHOT/integration/testdata/native/v1" \
+  "$SNAPSHOT/$HOSTED_SEED_DIRECTORY" \
   "$SNAPSHOT/build/plugins/$TARGET_GOOS/$TARGET_GOARCH" \
   "$SNAPSHOT/.cache/native-host/$TARGET_GOOS/$TARGET_GOARCH" \
   "$TEMP_ROOT/home" \
@@ -106,7 +108,9 @@ cp "$INTEGRATION_BINARY" "$SNAPSHOT/.cache/native-host/$TARGET_GOOS/$TARGET_GOAR
 
 git -C "$REPO_DIR" ls-files --cached --others --exclude-standard -- \
   'integration/testdata/native/v1/*.json' \
-  'integration/testdata/native/v1/*.sse' >"$SEED_LIST"
+  'integration/testdata/native/v1/*.sse' \
+  "$HOSTED_SEED_DIRECTORY/request.json" \
+  "$HOSTED_SEED_DIRECTORY/response.json" >"$SEED_LIST"
 if [ ! -s "$SEED_LIST" ]; then
   printf 'error: native fixture seeds are missing from the worktree\n' >&2
   exit 1
@@ -119,9 +123,17 @@ for seed in $REQUIRED_SEEDS; do
   fi
 done
 
+for seed in request.json response.json; do
+  if ! grep -Fqx -- "$HOSTED_SEED_DIRECTORY/$seed" "$SEED_LIST"; then
+    printf 'error: required hosted fixture seed is missing: %s\n' "$seed" >&2
+    exit 1
+  fi
+done
+
 while IFS= read -r relative_path; do
   case "$relative_path" in
     integration/testdata/native/v1/*.json | integration/testdata/native/v1/*.sse) ;;
+    "$HOSTED_SEED_DIRECTORY/request.json" | "$HOSTED_SEED_DIRECTORY/response.json") ;;
     *)
       printf 'error: unexpected path in native fixture seed list: %s\n' "$relative_path" >&2
       exit 1

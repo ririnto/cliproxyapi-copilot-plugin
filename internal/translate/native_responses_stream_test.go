@@ -3,6 +3,7 @@ package translate
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -215,6 +216,54 @@ func TestNativeResponsesWebSearchBufferIsBounded(t *testing.T) {
 	frame := []byte(fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\n", strings.Repeat("x", nativeWebSearchBufferLimit)))
 	if _, err := nativeResponsesStream(frame, &state, false); err == nil {
 		t.Fatal("unbounded pending native search stream accepted")
+	}
+}
+
+func TestNativeResponsesDeclaredAutoSearchWithoutInvocationReleasesTerminal(t *testing.T) {
+	t.Parallel()
+	directory := "testdata/native-hosted-tool-stream-captures/gpt-search-captured-history-continuation"
+	terminal := readHostedStreamFixture(t, directory, "response.json")
+	for _, item := range gjson.GetBytes(terminal, "output").Array() {
+		if item.Get("type").String() == "web_search_call" {
+			t.Fatal("captured continuation unexpectedly invokes search")
+		}
+	}
+	request := []byte(`{"model":"gpt-6-luna","stream":true,"tools":[{"type":"web_search"}],"tool_choice":"auto"}`)
+	created := []byte(`{"type":"response.created","response":{"id":"unseen-upstream","status":"in_progress","output":[]}}`)
+	completed, err := json.Marshal(map[string]any{"type": "response.completed", "response": json.RawMessage(terminal)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := responseSSEBytes("response.created", created)
+	last := responseSSEBytes("response.completed", completed)
+	var state any
+	if out, err := StreamFromEndpoint(context.Background(), EndpointResponses, "openai-response", "gpt-6-luna", request, request, first, &state); err != nil || out != nil {
+		t.Fatalf("declared auto search leaked its created frame: output=%d err=%v", len(out), err)
+	}
+	out, err := StreamFromEndpoint(context.Background(), EndpointResponses, "openai-response", "gpt-6-luna", request, request, last, &state)
+	if err != nil || len(out) != 2 || state != nil {
+		t.Fatalf("noninvoked search terminal release: output=%d state=%T err=%v", len(out), state, err)
+	}
+	_, actualCreated, _, err := parseSSEFrame(out[0])
+	if err != nil || gjson.GetBytes(actualCreated, "response.id").String() != gjson.GetBytes(terminal, "id").String() {
+		t.Fatalf("created frame did not use the actual terminal identity: %v", err)
+	}
+	if !bytes.Equal(out[1], last) {
+		t.Fatal("noninvoked search changed the captured terminal frame")
+	}
+}
+
+func TestNativeResponsesDeclaredAutoSearchWithoutInvocationOverflowFailsClosed(t *testing.T) {
+	t.Parallel()
+	request := []byte(`{"model":"gpt-6-luna","stream":true,"tools":[{"type":"web_search"}],"tool_choice":"auto"}`)
+	first := []byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"unseen-upstream\",\"status\":\"in_progress\",\"output\":[]}}\n\n")
+	var state any
+	if out, err := StreamFromEndpoint(context.Background(), EndpointResponses, "openai-response", "gpt-6-luna", request, request, first, &state); err != nil || out != nil {
+		t.Fatalf("start declared-search buffer: output=%d err=%v", len(out), err)
+	}
+	frame := []byte(fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\n", strings.Repeat("x", nativeWebSearchBufferLimit)))
+	if out, err := StreamFromEndpoint(context.Background(), EndpointResponses, "openai-response", "gpt-6-luna", request, request, frame, &state); err == nil || out != nil {
+		t.Fatalf("overflow returned partial native output: output=%d err=%v", len(out), err)
 	}
 }
 

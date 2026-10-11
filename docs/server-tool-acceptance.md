@@ -33,6 +33,12 @@ Earlier events use those identities while terminal bytes, ciphertext, call IDs, 
 Other native Responses streams retain their existing streaming behavior.
 Hosted search therefore delays client output until the terminal snapshot arrives.
 
+Declared search also retains the barrier when `tool_choice: auto` produces no search invocation.
+The barrier fails closed at its size limit, with no partially repaired frames released.
+Matched-host regressions cover terminal-remapped interrupt identities, a late interrupt during the next active turn, and cancellation before buffered completion.
+Separate translator regressions cover successful no-invocation release and overflow without emitted frames.
+These tests establish bridge behavior with synthetic fixtures; they do not establish original-client control emission or provider capability.
+
 Five complete actual request/response pairs are retained in [portable regression fixtures](../internal/translate/testdata/native-hosted-tool-stream-captures/README.md).
 Synthetic lifecycle mutations and native-host tests establish regression behavior separately from live provider capability.
 This follow-up made five inference dispatches and five authentication/catalogue startup pairs, including the continuation-only audit stopped before inference.

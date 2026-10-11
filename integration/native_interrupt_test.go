@@ -28,6 +28,7 @@ func TestNativeHostResponseInterrupt(t *testing.T) {
 	if binary == "" {
 		t.Skip("set CPA_BINARY to the prepared CLIProxyAPI v8 server for native host integration")
 	}
+	runNativeHostedInterruptCases(t, binary)
 	t.Run("PluginActiveHTTPStreamAndLateBoundary", func(t *testing.T) {
 		state := newNativeFixture(t)
 		upstream := httptest.NewServer(state)
@@ -371,20 +372,31 @@ func startNativeInterruptDiagnosticHost(t *testing.T, binary, upstream string, p
 	}
 	var config map[string]any
 	if plugin {
-		pluginDirectory := filepath.Join(root, "plugins", runtime.GOOS, runtime.GOARCH)
-		if err := os.MkdirAll(pluginDirectory, 0700); err != nil {
-			t.Fatal(err)
-		}
-		extension := map[string]string{"darwin": ".dylib", "windows": ".dll"}[runtime.GOOS]
-		if extension == "" {
-			extension = ".so"
-		}
-		artifact, err := os.ReadFile(filepath.Join("..", "build", "plugins", runtime.GOOS, runtime.GOARCH, "cliproxyapi-copilot"+extension))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(pluginDirectory, "cliproxyapi-copilot"+extension), artifact, 0600); err != nil {
-			t.Fatal(err)
+		pluginRoot := strings.TrimSpace(os.Getenv("CPA_LIVE_EXISTING_PLUGIN_DIR"))
+		if pluginRoot != "" {
+			if err := validateLiveExistingPluginDirectory(pluginRoot); err != nil {
+				t.Fatalf("existing interrupt plugin directory is invalid: %v", err)
+			}
+			if selected := strings.TrimSpace(os.Getenv("CPA_LIVE_PLUGIN_PATH")); selected != "" && filepath.Clean(selected) != filepath.Join(pluginRoot, "cliproxyapi-copilot"+livePluginExtension()) {
+				t.Fatal("declared interrupt plugin path does not match the artifact loaded in place")
+			}
+		} else {
+			pluginRoot = filepath.Join(root, "plugins")
+			pluginDirectory := filepath.Join(pluginRoot, runtime.GOOS, runtime.GOARCH)
+			if err := os.MkdirAll(pluginDirectory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			extension := map[string]string{"darwin": ".dylib", "windows": ".dll"}[runtime.GOOS]
+			if extension == "" {
+				extension = ".so"
+			}
+			artifact, err := os.ReadFile(filepath.Join("..", "build", "plugins", runtime.GOOS, runtime.GOARCH, "cliproxyapi-copilot"+extension))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(pluginDirectory, "cliproxyapi-copilot"+extension), artifact, 0600); err != nil {
+				t.Fatal(err)
+			}
 		}
 		body, authDirectory := nativeRuntimeConfig(t, root, port, upstream, "")
 		if err := os.MkdirAll(authDirectory, 0700); err != nil {
@@ -396,6 +408,7 @@ func startNativeInterruptDiagnosticHost(t *testing.T, binary, upstream string, p
 		if err := yaml.Unmarshal(body, &config); err != nil {
 			t.Fatal(err)
 		}
+		nativeMap(t, config["plugins"])["dir"] = pluginRoot
 	} else {
 		config = map[string]any{"config-version": 8, "server": map[string]any{"host": "127.0.0.1", "port": port}, "management": map[string]any{"disable-control-panel": true}, "access": map[string]any{"api-keys": []string{"fixture-client-key"}}, "oauth": map[string]any{"auth-dir": filepath.Join(root, "auths")}, "codex-api-key": []any{map[string]any{"api-key": "fixture-codex-upstream", "base-url": upstream, "websockets": true, "models": []any{map[string]any{"name": "fixture-summary", "alias": "fixture-summary"}}}}}
 		config["upstream"] = map[string]any{"codex": map[string]any{"response-steering": true, "stream-bootstrap-buffering": false}}
