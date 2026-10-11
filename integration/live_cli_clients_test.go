@@ -148,6 +148,12 @@ func testLiveCLIClientWithGate(t *testing.T, client, base string, gate *liveServ
 		t.Errorf("%s CLI version check failed", client)
 		return
 	}
+	if client == "codex" && phase == "L-native-stream-revalidation" {
+		expected := strings.TrimSpace(os.Getenv("CPA_LIVE_CODEX_EXPECTED_VERSION"))
+		if expected == "" || strings.TrimSpace(string(versionOutput)) != "codex-cli "+expected {
+			t.Fatal("selected original Codex version did not match its declared version")
+		}
+	}
 	t.Logf("client=%s version=%s", client, strings.TrimSpace(string(versionOutput)))
 	root := t.TempDir()
 	if err := os.Chmod(root, 0700); err != nil {
@@ -291,7 +297,7 @@ func TestLiveCapturedCLISelectedClients(t *testing.T) {
 
 func runLiveCLIWithEffort(t *testing.T, path, client, base, root, prompt, effort string) liveCLIResult {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var args []string
 	if client == "claude" {

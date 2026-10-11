@@ -1,10 +1,14 @@
 # Live Copilot compatibility validation
 
-## Current validation (2026-10-10)
+## Current validation (2026-10-11)
 
 The latest dependency and original-client checks use CLIProxyAPI SDK v8.0.23.
 The matched host used `replace github.com/router-for-me/CLIProxyAPI/v8 => github.com/ririnto/CLIProxyAPI/v8 v8.0.0-20261010040012-c48c64443575` from `go.mod` and Go 1.27.2.
 Claude Code 2.1.296 and Codex CLI 0.162.1 ran against that matched host.
+The original Codex cases were revalidated after the declared-search stream identity barrier changed their Responses lifecycle.
+The stable installed 0.162.1 executable ran directly in isolated client homes.
+The current clean plugin was built into a separate artifact directory and loaded there in place, without copying or installing a plugin.
+The existing operating proxy, installed plugin, original credentials and saved configuration were preserved.
 
 All 18 protocol matrix calls passed across JSON and SSE.
 Each of the three models passed Chat, Responses, and Messages in both formats.
@@ -18,14 +22,21 @@ Each of the three models passed Chat, Responses, and Messages in both formats.
 | Client | Baseline | Web search | Delegation |
 | --- | --- | --- | --- |
 | Claude Code 2.1.296 | PASS | Invoked; Copilot returned HTTP 400 `unsupported_value` | Real Agent subdelegation: PASS |
-| Codex CLI 0.162.1 | PASS | Native search: PASS | Child spawn, wait, and handback: PASS |
+| Codex CLI 0.162.1 | PASS after stream repair | FAIL: declaration present, model reported native search unavailable without invoking it | Real child, wait, and handback: PASS after stream repair |
+
+The earlier original Codex native-search PASS remains historical evidence.
+The current failed search request contains the genuine native `web_search` declaration with external access enabled.
+HTTP 200, a completed turn and a refusal sentence do not establish tool execution.
+The failed request and complete response remain retained; no identical retry was made.
 
 The Codex result followed preservation of the reserved Responses schema's `collaboration.wait_agent.timeout_ms` number type through CPA.
 The plugin did not rewrite that schema or invent a delegated result.
 
-The original Codex app-server completed `turn/interrupt` and a same-thread follow-up across two actual GPT-6-Luna medium Responses requests.
+The current original Codex app-server revalidation completed `turn/interrupt` and a same-thread follow-up across two actual GPT-6-Luna medium Responses requests.
 The original client sent zero `response.interrupt` frames to CPA during that run.
 The RPC result does not prove that Codex emitted that wire frame.
+The same-thread follow-up used a new WebSocket with `previous_response_id: null`.
+It establishes app-server thread continuation, not a Responses-chain continuation.
 Synthetic native-control regressions remain separate evidence.
 The relay records application messages but cannot expose WebSocket masking bits or fragmentation boundaries.
 
@@ -53,7 +64,17 @@ The plugin now buffers declared search from the first event and binds earlier id
 An actual rerun passed identity checks but retained an exact result/citation URL-pairing failure.
 A separate real continuation reused the original captured terminal output and ciphertext unchanged and passed without another search.
 The original failed native streams remain failed; offline repair and authentic terminal eligibility are recorded separately.
-See [hosted-tool current acceptance and remaining inputs](server-tool-acceptance.md#current-acceptance-2026-10-10).
+The original app-server HTTPS-image input was also tested with the already-published 177-byte PNG.
+Codex rejected `turn/start` with JSON-RPC error `-32600`: `remote image URLs are not supported; use an inline data URL instead`.
+The rejection happened before any inference request reached CPA; it made zero provider inference calls.
+It does not establish whether the exact Copilot model accepts remote image references.
+The test preserves the original URL, `detail: high`, exact model and medium effort, without replacing the URL with inline bytes.
+
+This revalidation added eight inference dispatches and three authentication/catalogue startup pairs.
+The expanded physical ledger is 96 inference, 37 authentication and 33 catalogue dispatches, including failures.
+One public fixture preparation fetch is counted separately.
+The unchanged 18-cell matrix and existing attachment evidence remain valid because their requests do not activate the declared hosted-search barrier.
+See [hosted-tool current acceptance and remaining inputs](server-tool-acceptance.md#current-acceptance-2026-10-11).
 
 To repeat the offline audit without writing an audit record, point the two private replay-directory variables at the retained capture directories.
 
@@ -370,3 +391,20 @@ That supplemental failure remains outside this validation unit.
 Temporary client homes, authentication files, host configuration, and host processes were removed after the live checks.
 
 The follow-up recorded 11 additional inference, six authentication and six catalogue dispatches, bringing expanded totals to 38, 20 and 16. One alternate-profile retry occurred before the intended cached-setting edit matched the generated config; its repeated 400 and a separate private correction record are retained. These are measured counts, not limits.
+
+## Loading an existing live artifact in place
+
+Set `CPA_LIVE_EXISTING_PLUGIN_DIR` to an absolute, flat directory containing the existing regular `cliproxyapi-copilot` platform library.
+The live host loads this directory directly and does not stage, copy or install that artifact.
+If `CPA_LIVE_PLUGIN_PATH` is also supplied, it must identify the same artifact.
+Unexpected native libraries, symlinks and nested directories are rejected before host startup.
+A directly built artifact directory may also contain the generated C header.
+
+`native-stream-revalidation` is a distinct original CLI/interrupt attempt so frozen historical outcomes are preserved.
+The original CLI runner has no inference deadline; cleanup still stops its owned process group.
+The HTTPS-image case is opt-in with `CPA_LIVE_ORIGINAL_HTTPS_IMAGE=1` and requires a private original app-server driver, declared installed version and prepared HTTPS source.
+[The maintained original driver](../scripts/original_codex_image.py) uses only the installed app-server JSON-RPC interface.
+Copy this source into the owned private execution directory with mode 0600 and set `CPA_LIVE_CODEX_IMAGE_DRIVER` to that file.
+The driver reads the declared original binary, catalogue and loopback sandbox from the existing live environment variables.
+Its acceptance checks the actual RPC input and answer, original POST route, unchanged URL/detail/model/effort, complete public and client lifecycles, terminal text/usage, and exact image colors.
+Client rejection, missing ingress and transport or semantic failure remain failures.

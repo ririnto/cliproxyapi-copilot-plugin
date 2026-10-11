@@ -36,6 +36,8 @@ func liveOriginalInterruptAttemptPhase(attempt string) (string, error) {
 	switch attempt {
 	case "", "latest-dependencies":
 		return "I-latest-dependencies", nil
+	case "native-stream-revalidation":
+		return "I-native-stream-revalidation", nil
 	case liveOriginalInterruptFixAttempt:
 		return "I-fix-relay-origin", nil
 	default:
@@ -44,11 +46,11 @@ func liveOriginalInterruptAttemptPhase(attempt string) (string, error) {
 }
 
 func liveOriginalInterruptCell(key string) bool {
-	return key == liveOriginalInterruptCellKey || key == "I-fix-relay-origin/codex-interrupt"
+	return key == liveOriginalInterruptCellKey || key == "I-fix-relay-origin/codex-interrupt" || key == "I-native-stream-revalidation/codex-interrupt"
 }
 
 func TestLiveOriginalInterruptClaimCell(t *testing.T) {
-	valid := []string{liveOriginalInterruptCellKey, "I-fix-relay-origin/codex-interrupt"}
+	valid := []string{liveOriginalInterruptCellKey, "I-fix-relay-origin/codex-interrupt", "I-native-stream-revalidation/codex-interrupt"}
 	for _, key := range valid {
 		if !liveOriginalInterruptCell(key) {
 			t.Errorf("original Codex interrupt claim cell was rejected: %q", key)
@@ -70,6 +72,7 @@ func TestLiveOriginalInterruptAttemptPhase(t *testing.T) {
 		{attempt: "", phase: "I-latest-dependencies"},
 		{attempt: "latest-dependencies", phase: "I-latest-dependencies"},
 		{attempt: liveOriginalInterruptFixAttempt, phase: "I-fix-relay-origin"},
+		{attempt: "native-stream-revalidation", phase: "I-native-stream-revalidation"},
 		{attempt: "fix-relay-origin-extra", wantErr: true},
 		{attempt: "Fix-relay-origin", wantErr: true},
 	}
@@ -657,9 +660,15 @@ func TestLiveOriginalCodexInterrupt(t *testing.T) {
 		}
 	}()
 	_ = livePacketPreflight(t)
-	if os.Getenv("CPA_LIVE_CODEX_EXPECTED_VERSION") != "0.162.1" {
+	expectedVersion := os.Getenv("CPA_LIVE_CODEX_EXPECTED_VERSION")
+	if expectedVersion != "0.162.1" {
 		t.Fatal("original Codex interrupt harness requires the verified 0.162.1 app-server")
 	}
+	version, versionErr := exec.Command(os.Getenv("CPA_LIVE_CODEX_BINARY"), "--version").Output()
+	if versionErr != nil || strings.TrimSpace(string(version)) != "codex-cli "+expectedVersion {
+		t.Fatal("original Codex interrupt client does not match the declared version")
+	}
+	summary["cli_version"] = strings.TrimSpace(string(version))
 	for _, name := range []string{"CPA_LIVE_CODEX_BINARY", "CPA_LIVE_CODEX_CATALOG", "CPA_LIVE_CODEX_SANDBOX", "CPA_LIVE_CODEX_INTERRUPT_DRIVER"} {
 		path := strings.TrimSpace(os.Getenv(name))
 		info, statErr := os.Lstat(path)
@@ -1005,26 +1014,34 @@ type originalInterruptGateEvidence struct {
 
 func inspectOriginalInterruptGate(t *testing.T, gate *liveServerToolGate, key string) (originalInterruptGateEvidence, error) {
 	t.Helper()
-	entries, err := os.ReadDir(gate.directory)
+	captures, err := readLiveGateCaptures(gate.directory)
 	if err != nil {
 		return originalInterruptGateEvidence{}, err
+	}
+	return inspectOriginalInterruptGateCaptures(captures, key)
+}
+
+func readLiveGateCaptures(directory string) ([]liveServerToolCapture, error) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, err
 	}
 	captures := make([]liveServerToolCapture, 0, len(entries))
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), "gate-") || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		body, err := os.ReadFile(filepath.Join(gate.directory, entry.Name()))
+		body, err := os.ReadFile(filepath.Join(directory, entry.Name()))
 		if err != nil {
-			return originalInterruptGateEvidence{}, err
+			return nil, err
 		}
 		var capture liveServerToolCapture
 		if err := json.Unmarshal(body, &capture); err != nil {
-			return originalInterruptGateEvidence{}, err
+			return nil, err
 		}
 		captures = append(captures, capture)
 	}
-	return inspectOriginalInterruptGateCaptures(captures, key)
+	return captures, nil
 }
 
 func inspectOriginalInterruptGateCaptures(captures []liveServerToolCapture, key string) (originalInterruptGateEvidence, error) {

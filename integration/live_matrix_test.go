@@ -798,27 +798,31 @@ func startLiveNativeHostWithGate(t *testing.T, binary string, storageJSON []byte
 	if err := portListener.Close(); err != nil {
 		t.Fatal("could not release live host port")
 	}
-	pluginDir := filepath.Join(root, "plugins", runtime.GOOS, runtime.GOARCH)
-	if err := os.MkdirAll(pluginDir, 0700); err != nil {
-		t.Fatal("could not create live plugin directory")
-	}
-	ext := ".so"
-	if runtime.GOOS == "darwin" {
-		ext = ".dylib"
-	}
-	if runtime.GOOS == "windows" {
-		ext = ".dll"
-	}
-	pluginPath := strings.TrimSpace(os.Getenv("CPA_LIVE_PLUGIN_PATH"))
-	if pluginPath == "" {
-		pluginPath = filepath.Join("..", "build", "plugins", runtime.GOOS, runtime.GOARCH, "cliproxyapi-copilot"+ext)
-	}
-	plugin, err := os.ReadFile(pluginPath)
-	if err != nil {
-		t.Fatal("live native plugin artifact is unavailable")
-	}
-	if err := os.WriteFile(filepath.Join(pluginDir, "cliproxyapi-copilot"+ext), plugin, 0600); err != nil {
-		t.Fatal("could not stage live native plugin")
+	pluginRoot := strings.TrimSpace(os.Getenv("CPA_LIVE_EXISTING_PLUGIN_DIR"))
+	if pluginRoot != "" {
+		if err := validateLiveExistingPluginDirectory(pluginRoot); err != nil {
+			t.Fatalf("existing live plugin directory is invalid: %v", err)
+		}
+		if selected := strings.TrimSpace(os.Getenv("CPA_LIVE_PLUGIN_PATH")); selected != "" && filepath.Clean(selected) != filepath.Join(pluginRoot, "cliproxyapi-copilot"+livePluginExtension()) {
+			t.Fatal("declared live plugin path does not match the artifact loaded in place")
+		}
+	} else {
+		pluginRoot = filepath.Join(root, "plugins")
+		pluginDir := filepath.Join(pluginRoot, runtime.GOOS, runtime.GOARCH)
+		if err := os.MkdirAll(pluginDir, 0700); err != nil {
+			t.Fatal("could not create live plugin directory")
+		}
+		pluginPath := strings.TrimSpace(os.Getenv("CPA_LIVE_PLUGIN_PATH"))
+		if pluginPath == "" {
+			pluginPath = filepath.Join("..", "build", "plugins", runtime.GOOS, runtime.GOARCH, "cliproxyapi-copilot"+livePluginExtension())
+		}
+		plugin, err := os.ReadFile(pluginPath)
+		if err != nil {
+			t.Fatal("live native plugin artifact is unavailable")
+		}
+		if err := os.WriteFile(filepath.Join(pluginDir, "cliproxyapi-copilot"+livePluginExtension()), plugin, 0600); err != nil {
+			t.Fatal("could not stage live native plugin")
+		}
 	}
 	authDir := filepath.Join(root, "auths")
 	if err := os.MkdirAll(authDir, 0700); err != nil {
@@ -852,7 +856,7 @@ func startLiveNativeHostWithGate(t *testing.T, binary string, storageJSON []byte
 	oauth := nativeMap(t, config["oauth"])
 	oauth["auth-dir"] = authDir
 	plugins := nativeMap(t, config["plugins"])
-	plugins["dir"] = filepath.Join(root, "plugins")
+	plugins["dir"] = pluginRoot
 	pluginConfigs := nativeMap(t, plugins["configs"])
 	pluginConfig := nativeMap(t, pluginConfigs["cliproxyapi-copilot"])
 	pluginConfig["auth_mode"] = authMode

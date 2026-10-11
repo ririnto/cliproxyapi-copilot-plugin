@@ -14,6 +14,8 @@ func liveCapturedCLIAttemptPhase(attempt string) (string, error) {
 	switch attempt {
 	case "", "latest-dependencies":
 		return "L-latest-dependencies", nil
+	case "native-stream-revalidation":
+		return "L-native-stream-revalidation", nil
 	case liveCapturedCLIFixAttempt:
 		return "L-fix-native-reserved-schema", nil
 	default:
@@ -22,7 +24,7 @@ func liveCapturedCLIAttemptPhase(attempt string) (string, error) {
 }
 
 func liveOriginalCLIClaimCells(phase string) []string {
-	if phase != "L-latest-dependencies" && phase != "L-fix-native-reserved-schema" {
+	if phase != "L-latest-dependencies" && phase != "L-fix-native-reserved-schema" && phase != "L-native-stream-revalidation" {
 		return nil
 	}
 	cells := []string{
@@ -54,7 +56,7 @@ func liveOriginalCLIClaimCell(key string) bool {
 }
 
 func TestLiveOriginalCLIClaimCell(t *testing.T) {
-	for _, phase := range []string{"L-latest-dependencies", "L-fix-native-reserved-schema"} {
+	for _, phase := range []string{"L-latest-dependencies", "L-fix-native-reserved-schema", "L-native-stream-revalidation"} {
 		cells := liveOriginalCLIClaimCells(phase)
 		if len(cells) != 6 {
 			t.Fatalf("phase %q returned %d claim cells, want exactly six", phase, len(cells))
@@ -92,6 +94,7 @@ func TestLiveCapturedCLIAttemptPhase(t *testing.T) {
 		{attempt: "", phase: "L-latest-dependencies"},
 		{attempt: "latest-dependencies", phase: "L-latest-dependencies"},
 		{attempt: liveCapturedCLIFixAttempt, phase: "L-fix-native-reserved-schema"},
+		{attempt: "native-stream-revalidation", phase: "L-native-stream-revalidation"},
 		{attempt: "fix-native-reserved-schema-extra", wantErr: true},
 		{attempt: "Latest-dependencies", wantErr: true},
 	}

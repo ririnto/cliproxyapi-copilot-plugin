@@ -164,7 +164,7 @@ func newLiveServerToolGateWithLedger(t *testing.T, directory, ledgerDirectory st
 
 func (g *liveServerToolGate) setPhaseCell(phase, cell string) error {
 	key := phase + "/" + cell
-	if _, ok := liveServerToolPhaseCells[key]; !ok && !liveAttachmentGateCell(key) && !liveDependencyMatrixCell(key) && !liveOriginalCLIClaimCell(key) && !liveOriginalInterruptCell(key) {
+	if _, ok := liveServerToolPhaseCells[key]; !ok && !liveAttachmentGateCell(key) && !liveDependencyMatrixCell(key) && !liveOriginalCLIClaimCell(key) && !liveOriginalInterruptCell(key) && !liveOriginalHTTPSImageCell(key) {
 		return errors.New("unknown server-tool phase cell")
 	}
 	g.mu.Lock()
@@ -317,7 +317,7 @@ func (g *liveServerToolGate) reserve(path string) (string, string, string, bool)
 		case "/chat/completions", "/responses", "/v1/messages":
 			category = "inference"
 			_, configured := liveServerToolPhaseCells[key]
-			if liveAttachmentGateCell(key) || liveDependencyMatrixCell(key) || liveOriginalCLIClaimCell(key) || liveOriginalInterruptCell(key) {
+			if liveAttachmentGateCell(key) || liveDependencyMatrixCell(key) || liveOriginalCLIClaimCell(key) || liveOriginalInterruptCell(key) || liveOriginalHTTPSImageCell(key) {
 				configured = true
 			}
 			if configured && !ledger.Frozen[key] && g.publicAPI != nil {
@@ -413,7 +413,7 @@ func (g *liveServerToolGate) withLedger(update func(*liveDispatchLedger) error) 
 
 func (g *liveServerToolGate) freezeCell(cell string) {
 	_, configured := liveServerToolPhaseCells[cell]
-	if !configured && !strings.HasPrefix(cell, "A/") && !strings.HasPrefix(cell, "B/") && !liveAttachmentGateCell(cell) && !liveDependencyMatrixCell(cell) && !liveOriginalCLIClaimCell(cell) && !liveOriginalInterruptCell(cell) {
+	if !configured && !strings.HasPrefix(cell, "A/") && !strings.HasPrefix(cell, "B/") && !liveAttachmentGateCell(cell) && !liveDependencyMatrixCell(cell) && !liveOriginalCLIClaimCell(cell) && !liveOriginalInterruptCell(cell) && !liveOriginalHTTPSImageCell(cell) {
 		return
 	}
 	g.mu.Lock()

@@ -5,9 +5,9 @@ The earlier [live validation](live-copilot-validation.md) remains complete withi
 Its 18 JSON/SSE inference cells do not establish hosted tools or complete native-client request parity.
 Unsupported responses, excluded declarations, client-executed functions, and unrun cases do not satisfy this acceptance.
 
-## Current acceptance (2026-10-10)
+## Current acceptance (2026-10-11)
 
-The latest matched host and dependency checks are described in [current live validation](live-copilot-validation.md#current-validation-2026-10-10).
+The latest matched host and dependency checks are described in [current live validation](live-copilot-validation.md#current-validation-2026-10-11).
 The corrected model-registry startup and five native JSON probes completed.
 The earlier startup race and NOTRUN snapshot below are historical.
 
@@ -36,12 +36,20 @@ Hosted search therefore delays client output until the terminal snapshot arrives
 Five complete actual request/response pairs are retained in [portable regression fixtures](../internal/translate/testdata/native-hosted-tool-stream-captures/README.md).
 Synthetic lifecycle mutations and native-host tests establish regression behavior separately from live provider capability.
 This follow-up made five inference dispatches and five authentication/catalogue startup pairs, including the continuation-only audit stopped before inference.
-The expanded ledger now records 88 inference, 34 authentication and 30 catalogue dispatches.
+A later current-stream original Codex revalidation added eight inference dispatches and three authentication/catalogue startup pairs.
+The expanded ledger now records 96 inference, 37 authentication and 33 catalogue dispatches.
+The separately counted public PNG preparation fetch is not inference.
 These counts are observations, not limits.
 
 The latest original-client attachments pass for Codex-to-Haiku PNG/PDF and Claude-to-GPT PDF.
 Claude-to-GPT PNG remains a semantic failure despite preserved bytes and successful transport.
-Original Codex interruption and same-thread continuation pass, while the client emitted zero `response.interrupt` frames.
+Current-stream original Codex baseline, real child delegation/wait and interruption/same-thread continuation pass.
+The original client still emitted zero `response.interrupt` and `response.incomplete` frames.
+The same-thread follow-up used a new WebSocket with `previous_response_id: null`; it does not prove Responses-chain continuation.
+The current original native-search request includes the actual hosted declaration, but the model reports the tool unavailable without invoking it; this case fails despite HTTP 200 and a completed client turn.
+Its earlier PASS remains historical and does not overwrite the current failure.
+The original app-server HTTPS-image request is now a captured client rejection: JSON-RPC `-32600`, remote image URLs unsupported.
+It reaches neither CPA inference ingress nor Copilot inference, so provider URL-reference capability remains unknown.
 Required synthetic wire tests cover active and late control handling separately.
 
 ## Remaining inputs and owners
@@ -54,12 +62,13 @@ Unchanged rejected profiles are retained without another speculative provider re
 | Cross-format hosted search and Bash SSE/history | Main needs a lossless destination representation and a ready original-client request preserving actual result ownership. |
 | Gemini search, Claude WebSearch/Web Fetch, GPT interpreter | Copilot capability owner must provide changed capability/profile evidence for the exact model and rejected declaration. |
 | Image generation, file search, hosted MCP and tool search | Main needs advertised exact-model capability and genuine files, servers or tool registry resources. |
-| Original HTTPS image references and remote uploads | Main needs an original client path that actually originates these carriers and authentic upload ownership. |
+| Original HTTPS image references and remote uploads | The installed Codex app-server rejects remote URLs before inference. The original-client owner must supply a supported URL carrier; uploads still need authentic issuance and ownership. |
 | Audio, video and office attachments | Main needs a supported original-client preparer and exact-model capability evidence. |
-| GPT PNG semantic failure and tracked citation pairing | Copilot model behavior must produce the correct content or exactly correlated result citation under a substantively changed case. |
+| GPT PNG, original search refusal and tracked citation pairing | Copilot model behavior must produce the correct content or exactly correlated result citation under a substantively changed case. |
 | Identity-neutral native HTTP headers | Main needs ownership release for the preserved provider WIP before changing its streaming `Accept` behavior. |
 | First-party Copilot session and executable-tool parity | Main needs an explicit authentic identity policy and genuine ACP/tool context unavailable from Claude/Codex inbound headers. |
 | Original-client interrupt wire emission | The original Codex client must emit the control frame before live wire acceptance can be established. |
+| Original token-limit incomplete continuation | The original-client owner must supply a genuine incomplete response and a supported client path that retains/resumes it; current Codex treats token-limit incomplete as a stream error and exposes no deterministic token-cap input. |
 
 The current catalogue advertises image/PDF support without establishing all other modalities as globally unsupported.
 Native Copilot CLI captures use `application/json` for streamed Chat/Responses and `*/*` for Messages.
