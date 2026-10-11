@@ -140,7 +140,7 @@ stream_max_retries = 0
         if thread.get('model') != 'gpt-6-luna':
             raise RuntimeError('thread_model_changed')
         thread_id = thread['thread']['id']
-        turn = await request('turn/start', {'threadId': thread_id, 'model': 'gpt-6-luna', 'effort': 'medium', 'input': [{'type': 'text', 'text': 'Inspect the attached image. Reply exactly LEFT=<left half color>;RIGHT=<right half color>, using lowercase color names. Do not use tools.'}, {'type': 'image', 'url': args.image_url, 'detail': 'high'}]})
+        turn = await request('turn/start', {'threadId': thread_id, 'model': 'gpt-6-luna', 'effort': 'medium', 'input': [{'type': 'text', 'text': 'Inspect the attached image. Reply exactly TOP=<top half color>;BOTTOM=<bottom half color>, using lowercase color names. Do not use tools.'}, {'type': 'image', 'url': args.image_url, 'detail': 'high'}]})
         turn_id = turn['turn']['id']
         while True:
             if fatal.done():

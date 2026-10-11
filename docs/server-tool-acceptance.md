@@ -52,6 +52,15 @@ The original app-server HTTPS-image request is now a captured client rejection: 
 It reaches neither CPA inference ingress nor Copilot inference, so provider URL-reference capability remains unknown.
 Required synthetic wire tests cover active and late control handling separately.
 
+The remaining citation and PNG answer failures are present in the actual provider bodies before bridge conversion.
+The tracked citation appears in action sources but not in meaningful search results; native stream repair preserves its completed terminal unchanged.
+The latest original Claude-to-GPT PNG carries identical prepared and public image bytes, and the wrong solid-blue provider answer equals the delivered client text.
+The historical Read-cycle capture instead answers both red, while the native GPT capture answers both blue; those are distinct failed attempts.
+No bridge-side output correction is justified by these captures.
+The original HTTPS harness did have a separate prompt/oracle defect: it asked for left/right colors on a red-top, blue-bottom fixture.
+The maintained prompt now uses top/bottom and its regression checks the actual PNG geometry.
+The original client rejection remains immutable and provider URL-reference acceptance remains NOTRUN.
+
 ## Remaining inputs and owners
 
 Main owns the remaining acceptance in [issue #5](https://github.com/ririnto/cpa-copilot-bridge/issues/5).

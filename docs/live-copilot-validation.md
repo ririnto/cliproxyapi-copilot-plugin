@@ -69,6 +69,9 @@ Codex rejected `turn/start` with JSON-RPC error `-32600`: `remote image URLs are
 The rejection happened before any inference request reached CPA; it made zero provider inference calls.
 It does not establish whether the exact Copilot model accepts remote image references.
 The test preserves the original URL, `detail: high`, exact model and medium effort, without replacing the URL with inline bytes.
+The maintained driver and oracle now ask for the fixture's red top and blue bottom.
+The earlier left/right prompt was inconsistent with the actual PNG; a regression decodes its pixels and rejects wrong colors or orientation.
+That harness correction does not change the retained client rejection or establish a provider URL-reference pass.
 
 This revalidation added eight inference dispatches and three authentication/catalogue startup pairs.
 The expanded physical ledger is 96 inference, 37 authentication and 33 catalogue dispatches, including failures.

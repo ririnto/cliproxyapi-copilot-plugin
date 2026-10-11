@@ -3,8 +3,10 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"image/png"
 	"net/url"
 	"os"
 	"os/exec"
@@ -184,10 +186,46 @@ func TestLiveOriginalCodexHTTPSImage(t *testing.T) {
 		t.Fatal("no allowed original image provider dispatch was captured")
 	}
 	summary["url_carrier"] = "preserved"
-	if runErr != nil || !outcome.Completed || outcome.Error != "" || strings.ToLower(strings.TrimSpace(outcome.Text)) != "left=red;right=blue" {
+	if runErr != nil || !outcome.Completed || outcome.Error != "" || !originalHTTPSImageAnswerMatchesFixture(outcome.Text) {
 		t.Fatal("original image turn did not complete with the actual fixture colors")
 	}
 	summary["stage"], summary["passed"] = "complete", true
+}
+
+func originalHTTPSImageAnswerMatchesFixture(text string) bool {
+	return strings.ToLower(strings.TrimSpace(text)) == "top=red;bottom=blue"
+}
+
+func TestOriginalHTTPSImageOracleMatchesActualFixture(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("testdata", "original-client-attachments", "visual.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := png.Decode(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := fixture.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			red, green, blue, _ := fixture.At(x, y).RGBA()
+			if y < bounds.Min.Y+bounds.Dy()/2 {
+				if red <= green || red <= blue {
+					t.Fatal("actual fixture top half is not red")
+				}
+			} else if blue <= red || blue <= green {
+				t.Fatal("actual fixture bottom half is not blue")
+			}
+		}
+	}
+	if !originalHTTPSImageAnswerMatchesFixture("TOP=red;BOTTOM=blue") {
+		t.Fatal("correct actual fixture colors were rejected")
+	}
+	for _, wrong := range []string{"LEFT=red;RIGHT=blue", "TOP=red;BOTTOM=red", "TOP=blue;BOTTOM=blue", "TOP=blue;BOTTOM=red"} {
+		if originalHTTPSImageAnswerMatchesFixture(wrong) {
+			t.Fatal("wrong fixture colors or orientation were accepted")
+		}
+	}
 }
 
 func originalHTTPSImageInRequest(request map[string]any, imageURL string) bool {
