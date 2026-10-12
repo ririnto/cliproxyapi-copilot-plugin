@@ -3,6 +3,8 @@ package translate
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -15,8 +17,17 @@ type responsesClaudeStreamState struct {
 	NextBlock         int
 	BufferAfterTool   bool
 	BufferAfterSearch bool
+	SearchItems       map[int]*responsesClaudeSearchItem
+	BufferedText      map[string][]string
+	BufferedCitations map[string][]any
+	TextParts         map[string]map[string]any
 	ToolOutputIndexes map[int]struct{}
 	Blocks            map[string]*responsesClaudeBlock
+}
+
+type responsesClaudeSearchItem struct {
+	Added map[string]any
+	Done  map[string]any
 }
 
 type responsesClaudeBlock struct {
@@ -26,6 +37,8 @@ type responsesClaudeBlock struct {
 	SawDelta        bool
 	Accumulated     string
 	TextAccumulated string
+	Citations       []any
+	TextFinished    bool
 	SignatureSent   bool
 	RedactedSent    bool
 	Encrypted       string
@@ -67,12 +80,15 @@ func responsesStreamToClaude(model string, frame []byte, state *any) ([][]byte, 
 	if event == "" {
 		event = stringValue(payload["type"])
 	}
+	if streamState.Stopped {
+		return nil, fmt.Errorf("Copilot Responses stream continued after its terminal response")
+	}
 	switch event {
 	case "error", "response.failed":
 		return nil, fmt.Errorf("Copilot Responses stream failed")
 	}
 	if (streamState.BufferAfterTool || streamState.BufferAfterSearch) && event != "response.completed" && event != "response.incomplete" {
-		if err := streamState.trackBufferedToolEvent(event, payload); err != nil {
+		if err := streamState.trackBufferedEvent(event, payload); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -86,12 +102,52 @@ func responsesStreamToClaude(model string, frame []byte, state *any) ([][]byte, 
 		out = append(out, streamState.start(responseObject, payload)...)
 	}
 	switch event {
+	case "response.content_part.added":
+		part := objectValue(payload["part"])
+		if typ := stringValue(part["type"]); typ == "output_text" || typ == "text" || typ == "refusal" {
+			block := streamState.block(contentKey(payload), "text")
+			if block.TextFinished || block.Open {
+				return nil, fmt.Errorf("Copilot Responses stream repeated a text part addition")
+			}
+			out = append(out, streamState.openText(block)...)
+			out = append(out, streamState.delta(block, "text_delta", "text", firstRawString(part, "text", "refusal"))...)
+			out = append(out, streamState.textCitations(block, arrayValue(part["annotations"]))...)
+		}
+	case "response.output_text.delta", "response.refusal.delta":
+		block := streamState.block(contentKey(payload), "text")
+		if block.TextFinished {
+			return nil, fmt.Errorf("Copilot Responses text delta followed its part completion")
+		}
+		out = append(out, streamState.openText(block)...)
+		out = append(out, streamState.delta(block, "text_delta", "text", rawStringValue(payload["delta"]))...)
+	case "response.output_text.annotation.added":
+		block := streamState.block(contentKey(payload), "text")
+		if block.TextFinished || intValue(payload["annotation_index"]) != len(block.Citations) {
+			return nil, fmt.Errorf("Copilot Responses citation has no unique open text position")
+		}
+		out = append(out, streamState.openText(block)...)
+		out = append(out, streamState.textCitations(block, []any{payload["annotation"]})...)
+	case "response.content_part.done":
+		part := objectValue(payload["part"])
+		if typ := stringValue(part["type"]); typ == "output_text" || typ == "text" || typ == "refusal" {
+			if err := streamState.trackTextPart(payload); err != nil {
+				return nil, err
+			}
+			fragments := []string{}
+			frames, err := streamState.reconcileTextPart(contentKey(payload), firstRawString(part, "text", "refusal"), arrayValue(part["annotations"]), &fragments)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, frames...)
+		}
 	case "response.output_item.added":
 		item := objectValue(payload["item"])
 		key := itemKey(payload)
 		switch stringValue(item["type"]) {
 		case "web_search_call":
-			streamState.BufferAfterSearch = true
+			if err := streamState.trackSearchItem(event, payload); err != nil {
+				return nil, err
+			}
 		case "reasoning":
 			block := streamState.block(key, "thinking")
 			block.Encrypted = rawStringValue(item["encrypted_content"])
@@ -100,22 +156,6 @@ func responsesStreamToClaude(model string, frame []byte, state *any) ([][]byte, 
 			if err := streamState.markToolOutputIndex(payload); err != nil {
 				return nil, err
 			}
-		}
-	case "response.content_part.added":
-		part := objectValue(payload["part"])
-		switch stringValue(part["type"]) {
-		case "output_text", "text", "refusal":
-			block := streamState.block(contentKey(payload), "text")
-			out = append(out, streamState.openText(block)...)
-			if text := firstRawString(part, "text", "refusal"); text != "" {
-				out = append(out, streamState.delta(block, "text_delta", "text", text)...)
-			}
-		}
-	case "response.output_text.delta", "response.refusal.delta":
-		block := streamState.block(contentKey(payload), "text")
-		out = append(out, streamState.openText(block)...)
-		if delta := rawStringValue(payload["delta"]); delta != "" {
-			out = append(out, streamState.delta(block, "text_delta", "text", delta)...)
 		}
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		block := streamState.block(itemKey(payload), "thinking")
@@ -127,14 +167,26 @@ func responsesStreamToClaude(model string, frame []byte, state *any) ([][]byte, 
 		if err := streamState.markToolOutputIndex(payload); err != nil {
 			return nil, err
 		}
-	case "response.content_part.done":
-		out = append(out, streamState.closeBlock(contentKey(payload))...)
 	case "response.output_item.done":
 		item := objectValue(payload["item"])
 		key := itemKey(payload)
-		if stringValue(item["type"]) == "function_call" || stringValue(item["type"]) == "custom_tool_call" {
+		if stringValue(item["type"]) == "web_search_call" {
+			if err := streamState.trackSearchItem(event, payload); err != nil {
+				return nil, err
+			}
+		} else if stringValue(item["type"]) == "function_call" || stringValue(item["type"]) == "custom_tool_call" {
 			if err := streamState.markToolOutputIndex(payload); err != nil {
 				return nil, err
+			}
+		} else if stringValue(item["type"]) == "message" {
+			for index, rawPart := range arrayValue(item["content"]) {
+				part := objectValue(rawPart)
+				fragments := []string{}
+				frames, err := streamState.reconcileTextPart(fmt.Sprintf("%s:content:%d", key, index), firstRawString(part, "text", "refusal"), arrayValue(part["annotations"]), &fragments)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, frames...)
 			}
 		} else {
 			block := streamState.Blocks[key]
@@ -161,6 +213,9 @@ func responsesStreamToClaude(model string, frame []byte, state *any) ([][]byte, 
 			}
 		}
 	case "response.completed", "response.incomplete":
+		if event == "response.completed" && stringValue(responseObject["status"]) != "completed" && (len(streamState.SearchItems) > 0 || hasMeaningfulValue(responseObject["status"])) {
+			return nil, fmt.Errorf("Copilot Responses stream ended with an invalid completed response")
+		}
 		if errFailure := responsesFailure(responseObject); errFailure != nil {
 			return nil, errFailure
 		}
@@ -305,12 +360,15 @@ func (s *responsesClaudeStreamState) closeBlock(key string) [][]byte {
 }
 
 func (s *responsesClaudeStreamState) reconcileTerminalOutput(response map[string]any) ([][]byte, error) {
-	if s.Stopped {
-		return nil, nil
-	}
 	items, ok := response["output"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("Copilot Responses completed without an output array")
+	}
+	if err := s.validateTerminalSearches(items); err != nil {
+		return nil, err
+	}
+	if err := s.validateTerminalText(items); err != nil {
+		return nil, err
 	}
 	var out [][]byte
 	terminalToolIndexes := make(map[int]struct{})
@@ -327,10 +385,22 @@ func (s *responsesClaudeStreamState) reconcileTerminalOutput(response map[string
 				if okPart && (stringValue(part["type"]) == "output_text" || stringValue(part["type"]) == "text" || stringValue(part["type"]) == "refusal") {
 					text := firstRawString(part, "text", "refusal")
 					contentKey := fmt.Sprintf("%s:content:%d", key, contentIndex)
-					out = append(out, s.reconcileTextPart(contentKey, text, arrayValue(part["annotations"]))...)
+					idKey := fmt.Sprintf("item:%s:content:%d", rawStringValue(item["id"]), contentIndex)
+					if s.Blocks[contentKey] == nil && (s.Blocks[idKey] != nil || s.BufferedText[idKey] != nil || s.TextParts[idKey] != nil) {
+						contentKey = idKey
+					}
+					fragments := append([]string(nil), s.BufferedText[contentKey]...)
+					frames, err := s.reconcileTextPart(contentKey, text, arrayValue(part["annotations"]), &fragments)
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, frames...)
 				}
 			}
 		case "web_search_call":
+			if status := stringValue(response["status"]); status != "completed" && status != "incomplete" {
+				return nil, fmt.Errorf("Copilot Responses terminal search has an ambiguous response status")
+			}
 			toolID := strings.TrimPrefix(rawStringValue(item["id"]), "ws_")
 			query := rawStringValue(objectValue(item["action"])["query"])
 			use := map[string]any{"type": "server_tool_use", "id": toolID, "name": "web_search", "input": map[string]any{"query": query}}
@@ -384,12 +454,53 @@ func (s *responsesClaudeStreamState) markToolOutputIndex(payload map[string]any)
 	return nil
 }
 
-func (s *responsesClaudeStreamState) trackBufferedToolEvent(event string, payload map[string]any) error {
+func (s *responsesClaudeStreamState) trackBufferedEvent(event string, payload map[string]any) error {
 	switch event {
+	case "response.content_part.added":
+		part := objectValue(payload["part"])
+		text := firstRawString(part, "text", "refusal")
+		if s.BufferedText == nil {
+			s.BufferedText = make(map[string][]string)
+		}
+		if text != "" {
+			s.BufferedText[contentKey(payload)] = append(s.BufferedText[contentKey(payload)], text)
+		}
+		if s.BufferedCitations == nil {
+			s.BufferedCitations = make(map[string][]any)
+		}
+		s.BufferedCitations[contentKey(payload)] = append(s.BufferedCitations[contentKey(payload)], arrayValue(part["annotations"])...)
+	case "response.output_text.delta", "response.refusal.delta":
+		if s.BufferedText == nil {
+			s.BufferedText = make(map[string][]string)
+		}
+		if text := rawStringValue(payload["delta"]); text != "" {
+			s.BufferedText[contentKey(payload)] = append(s.BufferedText[contentKey(payload)], text)
+		}
+	case "response.output_text.annotation.added":
+		if s.BufferedCitations == nil {
+			s.BufferedCitations = make(map[string][]any)
+		}
+		key := contentKey(payload)
+		index := len(s.BufferedCitations[key])
+		if block := s.Blocks[key]; block != nil {
+			index += len(block.Citations)
+		}
+		if intValue(payload["annotation_index"]) != index {
+			return fmt.Errorf("Copilot Responses buffered citation has no unique text position")
+		}
+		s.BufferedCitations[key] = append(s.BufferedCitations[key], payload["annotation"])
+	case "response.content_part.done":
+		return s.trackTextPart(payload)
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		return s.markToolOutputIndex(payload)
 	case "response.output_item.added", "response.output_item.done":
 		item := objectValue(payload["item"])
+		if index, err := strconv.Atoi(numberKey(payload["output_index"])); err == nil && s.SearchItems[index] != nil && stringValue(item["type"]) != "web_search_call" {
+			return fmt.Errorf("Copilot Responses search stream changed its item type")
+		}
+		if stringValue(item["type"]) == "web_search_call" {
+			return s.trackSearchItem(event, payload)
+		}
 		if stringValue(item["type"]) == "function_call" || stringValue(item["type"]) == "custom_tool_call" {
 			return s.markToolOutputIndex(payload)
 		}
@@ -397,33 +508,157 @@ func (s *responsesClaudeStreamState) trackBufferedToolEvent(event string, payloa
 	return nil
 }
 
-func (s *responsesClaudeStreamState) reconcileText(key, text string) [][]byte {
-	return s.reconcileTextPart(key, text, nil)
+func (s *responsesClaudeStreamState) trackSearchItem(event string, payload map[string]any) error {
+	index, err := strconv.Atoi(numberKey(payload["output_index"]))
+	if err != nil || index < 0 {
+		return fmt.Errorf("Copilot Responses search stream event has an invalid output index")
+	}
+	item := objectValue(payload["item"])
+	id := rawStringValue(item["id"])
+	if payloadID := rawStringValue(payload["item_id"]); payloadID != "" && payloadID != id {
+		return fmt.Errorf("Copilot Responses search stream event has conflicting item IDs")
+	}
+	if s.SearchItems == nil {
+		s.SearchItems = make(map[int]*responsesClaudeSearchItem)
+	}
+	call := s.SearchItems[index]
+	if event == "response.output_item.added" {
+		if call != nil {
+			return fmt.Errorf("Copilot Responses search stream repeated an addition")
+		}
+		for _, previous := range s.SearchItems {
+			if rawStringValue(previous.Added["id"]) == id {
+				return fmt.Errorf("Copilot Responses search stream reused an item ID")
+			}
+		}
+		s.SearchItems[index] = &responsesClaudeSearchItem{Added: item}
+	} else {
+		if call == nil || call.Done != nil || rawStringValue(call.Added["id"]) != id {
+			return fmt.Errorf("Copilot Responses search completion has no unique matching addition")
+		}
+		query := rawStringValue(objectValue(call.Added["action"])["query"])
+		if query != "" && query != rawStringValue(objectValue(item["action"])["query"]) {
+			return fmt.Errorf("Copilot Responses search completion changed its initial query")
+		}
+		call.Done = item
+	}
+	s.BufferAfterSearch = true
+	return nil
 }
 
-func (s *responsesClaudeStreamState) reconcileTextPart(key, text string, citations []any) [][]byte {
-	block := s.Blocks[key]
-	remainder := text
-	if block != nil && block.SawDelta {
-		if !strings.HasPrefix(text, block.TextAccumulated) {
-			return nil
+func (s *responsesClaudeStreamState) validateTerminalSearches(items []any) error {
+	for index, call := range s.SearchItems {
+		if index >= len(items) || call.Done == nil || !reflect.DeepEqual(call.Done, objectValue(items[index])) {
+			return fmt.Errorf("Copilot Responses terminal search does not match its streamed completion at output index %d", index)
 		}
-		remainder = strings.TrimPrefix(text, block.TextAccumulated)
 	}
-	if remainder == "" && len(citations) == 0 {
-		return nil
+	return nil
+}
+
+func (s *responsesClaudeStreamState) validateTerminalText(items []any) error {
+	terminalParts := make(map[string]map[string]any)
+	for index, rawItem := range items {
+		item := objectValue(rawItem)
+		for contentIndex, rawPart := range arrayValue(item["content"]) {
+			part := objectValue(rawPart)
+			terminalParts[fmt.Sprintf("item:%d:content:%d", index, contentIndex)] = part
+			terminalParts[fmt.Sprintf("item:%s:content:%d", rawStringValue(item["id"]), contentIndex)] = part
+		}
 	}
-	target, targetKey := terminalBlock(s, key, "text", block)
+	for key, part := range s.TextParts {
+		terminal := terminalParts[key]
+		if terminal == nil || firstRawString(part, "text", "refusal") != firstRawString(terminal, "text", "refusal") || !slices.EqualFunc(arrayValue(part["annotations"]), arrayValue(terminal["annotations"]), reflect.DeepEqual) {
+			return fmt.Errorf("Copilot Responses terminal text part does not match its completed stream part")
+		}
+	}
+	for key, block := range s.Blocks {
+		if block.Kind != "text" {
+			continue
+		}
+		part := terminalParts[key]
+		if part == nil || !strings.HasPrefix(firstRawString(part, "text", "refusal"), block.TextAccumulated) {
+			return fmt.Errorf("Copilot Responses terminal text changed its streamed part boundaries")
+		}
+	}
+	for key, streamed := range s.BufferedText {
+		prefix := ""
+		if block := s.Blocks[key]; block != nil {
+			prefix = block.TextAccumulated
+		}
+		part := terminalParts[key]
+		if part == nil || !strings.HasPrefix(firstRawString(part, "text", "refusal"), prefix+strings.Join(streamed, "")) {
+			return fmt.Errorf("Copilot Responses terminal text does not match its stream")
+		}
+	}
+	for key, citations := range s.BufferedCitations {
+		part := terminalParts[key]
+		allCitations := []any{}
+		if block := s.Blocks[key]; block != nil {
+			allCitations = append(allCitations, block.Citations...)
+		}
+		allCitations = append(allCitations, citations...)
+		terminal := arrayValue(part["annotations"])
+		if part == nil || len(terminal) < len(allCitations) || !slices.EqualFunc(terminal[:len(allCitations)], allCitations, reflect.DeepEqual) {
+			return fmt.Errorf("Copilot Responses terminal citations do not match their streamed part")
+		}
+	}
+	return nil
+}
+
+func (s *responsesClaudeStreamState) trackTextPart(payload map[string]any) error {
+	if s.TextParts == nil {
+		s.TextParts = make(map[string]map[string]any)
+	}
+	key := contentKey(payload)
+	if s.TextParts[key] != nil {
+		return fmt.Errorf("Copilot Responses stream repeated a text part completion")
+	}
+	s.TextParts[key] = objectValue(payload["part"])
+	return nil
+}
+
+func (s *responsesClaudeStreamState) reconcileTextPart(key, text string, citations []any, fragments *[]string) ([][]byte, error) {
+	target := s.block(key, "text")
+	if !strings.HasPrefix(text, target.TextAccumulated) || len(citations) < len(target.Citations) || !slices.EqualFunc(citations[:len(target.Citations)], target.Citations, reflect.DeepEqual) {
+		return nil, fmt.Errorf("Copilot Responses completed text or citations do not match their streamed part")
+	}
+	text = strings.TrimPrefix(text, target.TextAccumulated)
+	citations = citations[len(target.Citations):]
+	if target.TextFinished {
+		if text != "" || len(citations) != 0 {
+			return nil, fmt.Errorf("Copilot Responses text changed after its part completion")
+		}
+		return nil, nil
+	}
 	out := s.openText(target)
-	out = append(out, s.delta(target, "text_delta", "text", remainder)...)
+	for text != "" && len(*fragments) > 0 {
+		fragment := (*fragments)[0]
+		length := min(len(fragment), len(text))
+		out = append(out, s.delta(target, "text_delta", "text", fragment[:length])...)
+		text = text[length:]
+		if length == len(fragment) {
+			*fragments = (*fragments)[1:]
+		} else {
+			(*fragments)[0] = fragment[length:]
+		}
+	}
+	out = append(out, s.delta(target, "text_delta", "text", text)...)
+	out = append(out, s.textCitations(target, citations)...)
+	out = append(out, s.closeBlock(key)...)
+	target.TextFinished = true
+	return out, nil
+}
+
+func (s *responsesClaudeStreamState) textCitations(target *responsesClaudeBlock, citations []any) [][]byte {
+	var out [][]byte
 	for _, citation := range citations {
-		out = append(out, [][]byte{claudeSSE("content_block_delta", map[string]any{
+		out = append(out, claudeSSE("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
 			"index": target.Index,
 			"delta": map[string]any{"type": "citations_delta", "citation": citation},
-		})}...)
+		}))
+		target.Citations = append(target.Citations, citation)
 	}
-	out = append(out, s.closeBlock(targetKey)...)
 	return out
 }
 

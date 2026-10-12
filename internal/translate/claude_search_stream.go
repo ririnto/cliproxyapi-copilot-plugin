@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
@@ -16,19 +17,26 @@ type claudeHostedSearchStreamState struct {
 	SearchesByBlock map[int]*claudeHostedSearchStreamCall
 	Blocks          map[int]map[string]any
 	Content         []any
+	TextGroupsDone  int
+	TextPart        map[string]any
+	TextPartIndex   int
+	TextBlockIndex  int
+	TextBlockOpen   bool
+	Sequence        int
 	PendingResult   string
 	Stopped         bool
 }
 
 type claudeHostedSearchStreamCall struct {
-	ID           string
-	Query        string
-	InitialQuery string
-	Input        strings.Builder
-	SawDelta     bool
-	Results      json.RawMessage
-	Part         map[string]any
-	ResultSeen   bool
+	ID              string
+	Query           string
+	InitialQuery    string
+	HasInitialQuery bool
+	Input           strings.Builder
+	SawDelta        bool
+	Results         json.RawMessage
+	Part            map[string]any
+	ResultSeen      bool
 }
 
 func claudeStreamToResponses(ctx context.Context, model string, original, translated, frame []byte, state *any) ([][]byte, error) {
@@ -81,7 +89,83 @@ func claudeStreamToResponses(ctx context.Context, model string, original, transl
 			return nil, err
 		}
 	}
-	return frames, nil
+	return streamState.restoreTextParts(event, data, frames)
+}
+
+func (s *claudeHostedSearchStreamState) restoreTextParts(sourceEvent string, sourceData []byte, frames [][]byte) ([][]byte, error) {
+	source, err := decodeObject(sourceData)
+	if err != nil {
+		return nil, err
+	}
+	if sourceEvent == "" {
+		sourceEvent = stringValue(source["type"])
+	}
+	block := s.Blocks[intValue(source["index"])]
+	part := map[string]any{"type": "output_text", "text": rawStringValue(block["text"]), "annotations": append([]any{}, arrayValue(block["citations"])...)}
+	var payloads []map[string]any
+	partAdded := false
+	for _, frame := range frames {
+		event, data, done, err := parseSSEFrame(frame)
+		if err != nil {
+			return nil, err
+		}
+		if done || len(data) == 0 {
+			continue
+		}
+		payload, err := decodeObject(data)
+		if err != nil {
+			return nil, err
+		}
+		if event == "" {
+			event = stringValue(payload["type"])
+		}
+		switch event {
+		case "response.output_text.done", "response.content_part.done":
+			continue
+		case "response.content_part.added":
+			s.TextPart = payload
+			s.TextPartIndex = 0
+			partAdded = true
+			payload["part"].(map[string]any)["text"] = part["text"]
+			payload["part"].(map[string]any)["annotations"] = part["annotations"]
+		case "response.output_text.delta":
+			payload["content_index"] = s.TextPartIndex
+		}
+		payloads = append(payloads, payload)
+	}
+	if stringValue(block["type"]) == "text" {
+		if sourceEvent == "content_block_start" && !partAdded {
+			if s.TextPart == nil {
+				return nil, fmt.Errorf("Claude text part has no translated message identity")
+			}
+			s.TextPartIndex++
+			payloads = append(payloads, map[string]any{
+				"type": "response.content_part.added", "item_id": s.TextPart["item_id"], "output_index": s.TextPart["output_index"], "content_index": s.TextPartIndex,
+				"part": part,
+			})
+		}
+		if sourceEvent == "content_block_stop" {
+			if s.TextPart == nil {
+				return nil, fmt.Errorf("Claude text completion has no translated message identity")
+			}
+			payloads = append(payloads,
+				map[string]any{"type": "response.output_text.done", "item_id": s.TextPart["item_id"], "output_index": s.TextPart["output_index"], "content_index": s.TextPartIndex, "text": block["text"]},
+				map[string]any{"type": "response.content_part.done", "item_id": s.TextPart["item_id"], "output_index": s.TextPart["output_index"], "content_index": s.TextPartIndex,
+					"part": part},
+			)
+		}
+	}
+	var out [][]byte
+	for _, payload := range payloads {
+		s.Sequence++
+		payload["sequence_number"] = s.Sequence
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("encode restored Responses text lifecycle: %w", err)
+		}
+		out = append(out, responseSSEBytes(stringValue(payload["type"]), encoded))
+	}
+	return out, nil
 }
 
 func claudeFrameNeedsHostedSearchState(event string, data []byte) bool {
@@ -146,6 +230,9 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 			copyBlock[key] = value
 		}
 		s.Blocks[index] = copyBlock
+		if s.TextBlockOpen {
+			return fmt.Errorf("Claude stream started content before completing its text block")
+		}
 		switch typ {
 		case "server_tool_use":
 			if s.PendingResult != "" {
@@ -167,13 +254,14 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 			}
 			call := &claudeHostedSearchStreamCall{ID: id, Part: map[string]any{"type": "server_tool_use", "id": id, "name": "web_search", "input": map[string]any{}}}
 			if query, exists := input["query"]; exists {
+				call.HasInitialQuery = true
 				var okQuery bool
 				call.InitialQuery, okQuery = query.(string)
 				if !okQuery {
 					return fmt.Errorf("Claude stream web search query has an unsupported value")
 				}
 			}
-			if call.InitialQuery != "" {
+			if call.HasInitialQuery {
 				call.Part["input"] = map[string]any{"query": call.InitialQuery}
 			}
 			s.Searches[id] = call
@@ -203,6 +291,8 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 					return fmt.Errorf("Claude stream text block has an unsupported value")
 				}
 				copyBlock["text"] = rawStringValue(block["text"])
+				s.TextBlockIndex = index
+				s.TextBlockOpen = true
 				s.Content = append(s.Content, copyBlock)
 			} else {
 				s.Content = append(s.Content, copyBlock)
@@ -220,7 +310,7 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 			if fragment == "" {
 				return nil
 			}
-			if call.InitialQuery != "" {
+			if call.HasInitialQuery {
 				return fmt.Errorf("Claude stream web search query has ambiguous initial and delta values")
 			}
 			call.SawDelta = true
@@ -233,6 +323,9 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 				return fmt.Errorf("Claude stream citation has no text block")
 			}
 			return nil
+		}
+		if stringValue(block["type"]) == "text" && (!s.TextBlockOpen || s.TextBlockIndex != index) {
+			return fmt.Errorf("Claude stream changed a completed text block")
 		}
 		switch stringValue(delta["type"]) {
 		case "text_delta":
@@ -256,14 +349,35 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 		}
 	case "content_block_stop":
 		index := intValue(payload["index"])
+		if stringValue(s.Blocks[index]["type"]) == "text" {
+			if !s.TextBlockOpen || s.TextBlockIndex != index {
+				return fmt.Errorf("Claude stream completed text without an open block")
+			}
+			s.TextBlockOpen = false
+		}
 		if call := s.SearchesByBlock[index]; call != nil {
 			if call.SawDelta {
-				input, err := decodeObject([]byte(call.Input.String()))
-				if err != nil || len(input) != 1 {
+				decoder := json.NewDecoder(strings.NewReader(call.Input.String()))
+				start, err := decoder.Token()
+				if err != nil || start != json.Delim('{') {
 					return fmt.Errorf("Claude stream web search query JSON is incomplete or ambiguous")
 				}
-				query, ok := input["query"].(string)
-				if !ok || strings.TrimSpace(query) == "" {
+				key, err := decoder.Token()
+				if err != nil || key != "query" {
+					return fmt.Errorf("Claude stream web search query JSON is incomplete or ambiguous")
+				}
+				var query string
+				if err := decoder.Decode(&query); err != nil {
+					return fmt.Errorf("Claude stream web search query has an unsupported value")
+				}
+				end, err := decoder.Token()
+				if err != nil || end != json.Delim('}') {
+					return fmt.Errorf("Claude stream web search query JSON is incomplete or ambiguous")
+				}
+				if _, err := decoder.Token(); err != io.EOF {
+					return fmt.Errorf("Claude stream web search query JSON has trailing data")
+				}
+				if strings.TrimSpace(query) == "" {
 					return fmt.Errorf("Claude stream web search query is incomplete")
 				}
 				call.Query = query
@@ -277,6 +391,9 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 			s.PendingResult = call.ID
 		}
 	case "message_stop":
+		if s.TextBlockOpen {
+			return fmt.Errorf("Claude stream stopped before completing its text block")
+		}
 		if s.PendingResult != "" {
 			return fmt.Errorf("Claude web search call has no result")
 		}
@@ -302,6 +419,21 @@ func (s *claudeHostedSearchStreamState) restore(frame []byte) ([]byte, error) {
 	if event == "" {
 		event = stringValue(payload["type"])
 	}
+	if event == "response.output_item.added" {
+		item := objectValue(payload["item"])
+		if stringValue(item["type"]) == "web_search_call" {
+			call := s.Searches[strings.TrimPrefix(rawStringValue(item["id"]), "ws_")]
+			if call == nil {
+				return nil, fmt.Errorf("translated Responses search addition has no Claude call")
+			}
+			if call.HasInitialQuery {
+				data, err = sjson.SetBytes(data, "item.action.query", call.InitialQuery)
+				if err != nil {
+					return nil, fmt.Errorf("restore initial Claude hosted search query")
+				}
+			}
+		}
+	}
 	if event == "response.output_item.done" {
 		item := objectValue(payload["item"])
 		if stringValue(item["type"]) == "web_search_call" {
@@ -310,9 +442,26 @@ func (s *claudeHostedSearchStreamState) restore(frame []byte) ([]byte, error) {
 				return nil, err
 			}
 			data = updated
+		} else if stringValue(item["type"]) == "message" {
+			_, groups := claudeHostedSearchContent(map[string]any{"content": s.Content})
+			var messageGroups []claudeCitationGroup
+			if s.TextGroupsDone < len(groups) {
+				run := groups[s.TextGroupsDone].Run
+				for s.TextGroupsDone < len(groups) && groups[s.TextGroupsDone].Run == run {
+					messageGroups = append(messageGroups, groups[s.TextGroupsDone])
+					s.TextGroupsDone++
+				}
+			}
+			if err := restoreClaudeResponseCitations([]any{item}, messageGroups); err != nil {
+				return nil, err
+			}
+			data, err = sjson.SetBytes(data, "item", item)
+			if err != nil {
+				return nil, fmt.Errorf("restore Claude text boundaries in Responses stream item")
+			}
 		}
 	}
-	if event == "response.completed" {
+	if event == "response.completed" || event == "response.incomplete" {
 		responseBytes, err := json.Marshal(objectValue(payload["response"]))
 		if err != nil {
 			return nil, fmt.Errorf("encode translated Responses stream completion")

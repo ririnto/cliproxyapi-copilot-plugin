@@ -183,6 +183,7 @@ type claudeHostedSearchPair struct {
 
 type claudeCitationGroup struct {
 	Text      string
+	Run       int
 	Citations []json.RawMessage
 }
 
@@ -190,7 +191,7 @@ func claudeHostedSearchContent(root map[string]any) ([]claudeHostedSearchPair, [
 	blocks, _ := root["content"].([]any)
 	var searches []claudeHostedSearchPair
 	var groups []claudeCitationGroup
-	var current *claudeCitationGroup
+	run := 0
 	for index := 0; index < len(blocks); index++ {
 		block, _ := blocks[index].(map[string]any)
 		if block == nil {
@@ -198,10 +199,7 @@ func claudeHostedSearchContent(root map[string]any) ([]claudeHostedSearchPair, [
 		}
 		switch stringValue(block["type"]) {
 		case "server_tool_use":
-			if current != nil {
-				groups = append(groups, *current)
-				current = nil
-			}
+			run++
 			id, query, err := validateClaudeHostedSearchUse(block)
 			if err != nil || index+1 >= len(blocks) {
 				continue
@@ -212,25 +210,17 @@ func claudeHostedSearchContent(root map[string]any) ([]claudeHostedSearchPair, [
 			}
 			index++
 		case "text":
-			if current == nil {
-				current = &claudeCitationGroup{}
-			}
-			current.Text += rawStringValue(block["text"])
+			group := claudeCitationGroup{Text: rawStringValue(block["text"]), Run: run}
 			for _, citation := range arrayValue(block["citations"]) {
 				encoded, err := json.Marshal(citation)
 				if err == nil {
-					current.Citations = append(current.Citations, encoded)
+					group.Citations = append(group.Citations, encoded)
 				}
 			}
+			groups = append(groups, group)
 		default:
-			if current != nil {
-				groups = append(groups, *current)
-				current = nil
-			}
+			run++
 		}
-	}
-	if current != nil {
-		groups = append(groups, *current)
 	}
 	return searches, groups
 }
@@ -253,7 +243,6 @@ func restoreClaudeHostedSearchResponse(source map[string]any, body []byte) ([]by
 			if !ok || stringValue(item["type"]) != "web_search_call" || rawStringValue(item["id"]) != responsesID {
 				continue
 			}
-			item["status"] = "completed"
 			item["action"] = map[string]any{"type": "search", "query": search.Query}
 			var results any
 			if err := json.Unmarshal(search.Results, &results); err != nil {
@@ -277,54 +266,33 @@ func restoreClaudeHostedSearchResponse(source map[string]any, body []byte) ([]by
 }
 
 func restoreClaudeResponseCitations(output []any, groups []claudeCitationGroup) error {
+	groupIndex := 0
 	for _, rawItem := range output {
 		item, ok := rawItem.(map[string]any)
 		if !ok || stringValue(item["type"]) != "message" {
 			continue
 		}
+		var text strings.Builder
 		for _, rawPart := range arrayValue(item["content"]) {
 			part := objectValue(rawPart)
-			if part != nil {
-				delete(part, "annotations")
+			if stringValue(part["type"]) != "output_text" && stringValue(part["type"]) != "text" {
+				return fmt.Errorf("Claude text boundaries cannot be restored onto non-text content")
 			}
+			text.WriteString(rawStringValue(part["text"]))
 		}
-	}
-	outputIndex := 0
-	for _, group := range groups {
-		if group.Text == "" {
+		if groupIndex == len(groups) {
+			if text.Len() != 0 {
+				return fmt.Errorf("translated Responses message has no matching Claude text")
+			}
 			continue
 		}
-		matched := false
-		groupOutputIndex := -1
-		for outputIndex < len(output) {
-			item, ok := output[outputIndex].(map[string]any)
-			if !ok || stringValue(item["type"]) != "message" {
-				outputIndex++
-				continue
-			}
-			content := arrayValue(item["content"])
-			messageText := make([]string, 0, len(content))
-			var firstText map[string]any
-			for _, rawPart := range content {
-				part := objectValue(rawPart)
-				if part == nil || (stringValue(part["type"]) != "output_text" && stringValue(part["type"]) != "text") {
-					continue
-				}
-				messageText = append(messageText, rawStringValue(part["text"]))
-				if firstText == nil {
-					firstText = part
-				}
-			}
-			if firstText == nil || !strings.Contains(strings.Join(messageText, ""), group.Text) {
-				outputIndex++
-				continue
-			}
-			groupOutputIndex = outputIndex
-			outputIndex++
-			if len(group.Citations) == 0 {
-				matched = true
-				break
-			}
+		run := groups[groupIndex].Run
+		var sourceText strings.Builder
+		var content []any
+		for groupIndex < len(groups) && groups[groupIndex].Run == run {
+			group := groups[groupIndex]
+			sourceText.WriteString(group.Text)
+			part := map[string]any{"type": "output_text", "text": group.Text, "annotations": []any{}}
 			annotations := make([]any, 0, len(group.Citations))
 			for _, rawCitation := range group.Citations {
 				var citation any
@@ -333,13 +301,17 @@ func restoreClaudeResponseCitations(output []any, groups []claudeCitationGroup) 
 				}
 				annotations = append(annotations, citation)
 			}
-			firstText["annotations"] = annotations
-			matched = true
-			break
+			part["annotations"] = annotations
+			content = append(content, part)
+			groupIndex++
 		}
-		if !matched || len(group.Citations) > 0 && groupOutputIndex < 0 {
-			return fmt.Errorf("Claude hosted search citation could not be restored exactly")
+		if text.String() != sourceText.String() {
+			return fmt.Errorf("Claude hosted search text could not be restored exactly")
 		}
+		item["content"] = content
+	}
+	if groupIndex != len(groups) {
+		return fmt.Errorf("Claude hosted search citation could not be restored exactly")
 	}
 	return nil
 }
