@@ -16,10 +16,6 @@ func chatRequestToResponses(model string, body []byte, stream bool) ([]byte, err
 	if err := validateChatRequestForResponses(body); err != nil {
 		return nil, err
 	}
-	searchTool, hasSearch, err := chatHostedSearchDeclaration(body)
-	if err != nil {
-		return nil, err
-	}
 	prepared, err := chatRequestWithOpaqueAssistantMarkers(body)
 	if err != nil {
 		return nil, err
@@ -45,12 +41,6 @@ func chatRequestToResponses(model string, body []byte, stream bool) ([]byte, err
 	responses, err = restoreChatResponsesConstraints(responses, body, model, stream)
 	if err != nil {
 		return nil, err
-	}
-	if hasSearch {
-		responses, err = appendChatHostedSearchTool(responses, searchTool)
-		if err != nil {
-			return nil, err
-		}
 	}
 	if key := gjson.GetBytes(body, "prompt_cache_key"); key.Exists() {
 		responses, err = sjson.SetRawBytes(responses, "prompt_cache_key", []byte(key.Raw))
@@ -81,11 +71,6 @@ func chatRequestToClaude(model string, body []byte, stream bool) ([]byte, error)
 	}
 	if err := validateChatToolHistory(body); err != nil {
 		return nil, err
-	}
-	if _, hasSearch, err := chatHostedSearchDeclaration(body); err != nil {
-		return nil, err
-	} else if hasSearch {
-		return nil, fmt.Errorf("Chat hosted web search cannot be represented by Messages")
 	}
 	prepared, err := chatRequestWithOpaqueAssistantMarkers(body)
 	if err != nil {
@@ -932,70 +917,6 @@ func restoreChatResponsesConstraints(responses, chat []byte, model string, strea
 				return nil, fmt.Errorf("preserve Chat function strictness in Responses request")
 			}
 		}
-	}
-	return updated, nil
-}
-
-func chatHostedSearchDeclaration(body []byte) ([]byte, bool, error) {
-	root, err := decodeObject(body)
-	if err != nil {
-		return nil, false, fmt.Errorf("decode Chat hosted-search declaration")
-	}
-	optionsValue, exists := root["web_search_options"]
-	if !exists {
-		return nil, false, nil
-	}
-	options, ok := optionsValue.(map[string]any)
-	if !ok {
-		return nil, false, fmt.Errorf("Chat web_search_options must be an object")
-	}
-	for key := range options {
-		if key != "search_context_size" && key != "user_location" {
-			return nil, false, fmt.Errorf("Chat web_search_options contains unsupported option %q", key)
-		}
-	}
-	declaration := []byte(`{"type":"web_search"}`)
-	if contextSize, exists := options["search_context_size"]; exists {
-		value, ok := contextSize.(string)
-		if !ok || value != "low" && value != "medium" && value != "high" {
-			return nil, false, fmt.Errorf("Chat web_search_options.search_context_size is invalid")
-		}
-		declaration, err = sjson.SetBytes(declaration, "search_context_size", value)
-		if err != nil {
-			return nil, false, fmt.Errorf("preserve Chat hosted-search context size")
-		}
-	}
-	if locationValue, exists := options["user_location"]; exists {
-		location, ok := locationValue.(map[string]any)
-		if !ok || stringValue(location["type"]) != "approximate" {
-			return nil, false, fmt.Errorf("Chat web_search_options.user_location cannot be represented by Responses")
-		}
-		for key, value := range location {
-			if key != "type" && key != "country" && key != "region" && key != "city" && key != "timezone" {
-				return nil, false, fmt.Errorf("Chat web_search_options.user_location contains unsupported option %q", key)
-			}
-			if _, ok := value.(string); !ok {
-				return nil, false, fmt.Errorf("Chat web_search_options.user_location.%s must be a string", key)
-			}
-		}
-		locationRaw := gjson.GetBytes(body, "web_search_options.user_location")
-		declaration, err = sjson.SetRawBytes(declaration, "user_location", []byte(locationRaw.Raw))
-		if err != nil {
-			return nil, false, fmt.Errorf("preserve Chat hosted-search location")
-		}
-	}
-	return declaration, true, nil
-}
-
-func appendChatHostedSearchTool(responses, declaration []byte) ([]byte, error) {
-	var tools [][]byte
-	for _, tool := range gjson.GetBytes(responses, "tools").Array() {
-		tools = append(tools, []byte(tool.Raw))
-	}
-	tools = append(tools, declaration)
-	updated, err := sjson.SetRawBytes(responses, "tools", rawJSONArray(tools))
-	if err != nil {
-		return nil, fmt.Errorf("preserve Chat hosted search in Responses request")
 	}
 	return updated, nil
 }

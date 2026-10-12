@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/arthur-sommer-etc/cliproxyapi-copilot-plugin/internal/translate"
@@ -60,7 +61,7 @@ func chatParityRequest(payload []byte) ExecuteRequest {
 	return request
 }
 
-func TestChatHostedSearchAndZeroTemperatureArePreparedBeforeJSONInference(t *testing.T) {
+func TestChatZeroTemperatureIsPreparedBeforeJSONInference(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		endpoint     string
@@ -68,21 +69,6 @@ func TestChatHostedSearchAndZeroTemperatureArePreparedBeforeJSONInference(t *tes
 		responseBody string
 		check        func(*testing.T, []byte)
 	}{
-		{
-			name:         "hosted Responses search",
-			endpoint:     translate.EndpointResponses,
-			payload:      `{"messages":[{"role":"user","content":"search"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"web_search_options":{"search_context_size":"low"}}`,
-			responseBody: `{"id":"resp_chat_parity","object":"response","status":"completed","model":"gpt-5.6-sol","output":[]}`,
-			check: func(t *testing.T, body []byte) {
-				t.Helper()
-				if gjson.GetBytes(body, "tools.0.type").String() != "function" || gjson.GetBytes(body, "tools.0.name").String() != "lookup" || gjson.GetBytes(body, "tools.0.strict").Bool() {
-					t.Fatalf("ordinary function declaration or Chat default strictness changed: %s", body)
-				}
-				if gjson.GetBytes(body, "tools.1.type").String() != "web_search" || gjson.GetBytes(body, "tools.1.search_context_size").String() != "low" {
-					t.Fatalf("hosted search declaration was not prepared: %s", body)
-				}
-			},
-		},
 		{
 			name:         "Messages zero temperature",
 			endpoint:     translate.EndpointMessages,
@@ -164,6 +150,43 @@ func TestChatRequestPreparationFailuresHaveZeroInferenceDispatch(t *testing.T) {
 					t.Fatalf("invalid request dispatched: Do=%d OpenStream=%d bodies=%d", host.doCount, host.openCount, len(host.requests))
 				}
 			})
+		}
+	}
+}
+
+func TestChatOfferedHostedSearchHasZeroJSONAndSSEInferenceDispatch(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		for _, endpoint := range []string{translate.EndpointResponses, translate.EndpointMessages} {
+			for _, test := range []struct {
+				name   string
+				fields string
+			}{
+				{name: "search only", fields: `"web_search_options":{}`},
+				{name: "nested approximate location", fields: `"web_search_options":{"search_context_size":"low","user_location":{"type":"approximate","approximate":{"country":"US","city":"Boston","region":"Massachusetts","timezone":"America/New_York"}}}`},
+				{name: "search and functions", fields: `"web_search_options":{},"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]`},
+				{name: "auto choice", fields: `"web_search_options":{},"tool_choice":"auto"`},
+				{name: "required choice", fields: `"web_search_options":{},"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"tool_choice":"required"`},
+				{name: "disabled choice", fields: `"web_search_options":{},"tool_choice":"none"`},
+				{name: "function choice", fields: `"web_search_options":{},"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"tool_choice":{"type":"function","function":{"name":"lookup"}}`},
+			} {
+				t.Run(fmt.Sprintf("%s/%s/stream=%t", test.name, endpoint, streaming), func(t *testing.T) {
+					service, host := newChatRequestParityService(t, endpoint, []byte(`{}`))
+					payload := []byte(`{"messages":[{"role":"user","content":"Search before answering."}],` + test.fields + `}`)
+					request := chatParityRequest(payload)
+					var err error
+					if streaming {
+						_, err = service.ExecuteStream(context.Background(), request)
+					} else {
+						_, err = service.Execute(context.Background(), request)
+					}
+					if err == nil || !strings.Contains(err.Error(), "Chat hosted web search cannot be represented") || !strings.Contains(err.Error(), "response/history") {
+						t.Fatalf("offered search did not fail before inference: %v", err)
+					}
+					if host.doCount != 0 || host.openCount != 0 || len(host.requests) != 0 {
+						t.Fatalf("offered search dispatched: Do=%d OpenStream=%d bodies=%d", host.doCount, host.openCount, len(host.requests))
+					}
+				})
+			}
 		}
 	}
 }

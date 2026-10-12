@@ -41,6 +41,15 @@ func RequestForEndpointFrom(source, model string, body []byte, stream bool, endp
 	if err := rejectMismatchedCopilotCarrier(from, to, model, body); err != nil {
 		return nil, err
 	}
+	if from == sdktranslator.FormatOpenAI && from != to {
+		root, err := decodeObject(body)
+		if err != nil {
+			return nil, fmt.Errorf("decode Chat request: %w", err)
+		}
+		if _, offered := root["web_search_options"]; offered {
+			return nil, fmt.Errorf("Chat hosted web search cannot be represented through %s: native hosted state, results and citations have no lossless Chat response/history representation", endpoint)
+		}
+	}
 	if from != to && from != sdktranslator.FormatOpenAIResponse {
 		if err := validateRequestAttachments(body, from, to); err != nil {
 			return nil, err
