@@ -557,12 +557,157 @@ func (s *responsesClaudeStreamState) validateTerminalSearches(items []any) error
 
 func (s *responsesClaudeStreamState) validateTerminalText(items []any) error {
 	terminalParts := make(map[string]map[string]any)
+	terminalOwners := make(map[string]string)
+	var terminalKeys []string
 	for index, rawItem := range items {
 		item := objectValue(rawItem)
+		if stringValue(item["type"]) != "message" {
+			continue
+		}
 		for contentIndex, rawPart := range arrayValue(item["content"]) {
 			part := objectValue(rawPart)
-			terminalParts[fmt.Sprintf("item:%d:content:%d", index, contentIndex)] = part
-			terminalParts[fmt.Sprintf("item:%s:content:%d", rawStringValue(item["id"]), contentIndex)] = part
+			key := fmt.Sprintf("item:%d:content:%d", index, contentIndex)
+			terminalParts[key] = part
+			terminalOwners[key] = key
+			if id := rawStringValue(item["id"]); id != "" {
+				idKey := fmt.Sprintf("item:%s:content:%d", id, contentIndex)
+				terminalParts[idKey] = part
+				terminalOwners[idKey] = key
+			}
+			if typ := stringValue(part["type"]); typ == "output_text" || typ == "text" || typ == "refusal" {
+				terminalKeys = append(terminalKeys, key)
+			}
+		}
+	}
+	anonymousKeys := make(map[string]struct{})
+	for key, block := range s.Blocks {
+		if block.Kind == "text" && strings.HasPrefix(key, "item::content:") {
+			anonymousKeys[key] = struct{}{}
+		}
+	}
+	for key := range s.TextParts {
+		if strings.HasPrefix(key, "item::content:") {
+			anonymousKeys[key] = struct{}{}
+		}
+	}
+	for key := range s.BufferedText {
+		if strings.HasPrefix(key, "item::content:") {
+			anonymousKeys[key] = struct{}{}
+		}
+	}
+	for key := range s.BufferedCitations {
+		if strings.HasPrefix(key, "item::content:") {
+			anonymousKeys[key] = struct{}{}
+		}
+	}
+	bindings := make(map[string]string)
+	for key := range anonymousKeys {
+		prefix := ""
+		var citations []any
+		if block := s.Blocks[key]; block != nil {
+			prefix = block.TextAccumulated
+			citations = append(citations, block.Citations...)
+		}
+		prefix += strings.Join(s.BufferedText[key], "")
+		citations = append(citations, s.BufferedCitations[key]...)
+		contentIndex := strings.TrimPrefix(key, "item::content:")
+		matched := ""
+		for _, candidate := range terminalKeys {
+			if contentIndex != "" && !strings.HasSuffix(candidate, ":content:"+contentIndex) {
+				continue
+			}
+			part := terminalParts[candidate]
+			text := firstRawString(part, "text", "refusal")
+			annotations := arrayValue(part["annotations"])
+			if !strings.HasPrefix(text, prefix) || len(annotations) < len(citations) || !slices.EqualFunc(annotations[:len(citations)], citations, reflect.DeepEqual) {
+				continue
+			}
+			if completed := s.TextParts[key]; completed != nil && (firstRawString(completed, "text", "refusal") != text || !slices.EqualFunc(arrayValue(completed["annotations"]), annotations, reflect.DeepEqual)) {
+				continue
+			}
+			if block := s.Blocks[key]; block != nil && block.TextFinished && (block.TextAccumulated != text || len(block.Citations) != len(annotations)) {
+				continue
+			}
+			if matched != "" {
+				return fmt.Errorf("Copilot Responses anonymous text has ambiguous terminal ownership")
+			}
+			matched = candidate
+		}
+		if matched == "" {
+			return fmt.Errorf("Copilot Responses anonymous text has no matching terminal part")
+		}
+		for source, target := range bindings {
+			if target == matched && source != key {
+				return fmt.Errorf("Copilot Responses anonymous text shares a terminal part")
+			}
+		}
+		for source, owner := range terminalOwners {
+			if owner != matched {
+				continue
+			}
+			if s.Blocks[source] != nil || s.TextParts[source] != nil || s.BufferedText[source] != nil || s.BufferedCitations[source] != nil {
+				return fmt.Errorf("Copilot Responses anonymous text conflicts with an identified stream part")
+			}
+		}
+		bindings[key] = matched
+	}
+	for key, matched := range bindings {
+		block := s.Blocks[key]
+		if block == nil {
+			continue
+		}
+		for index, rawItem := range items {
+			if strings.HasPrefix(matched, fmt.Sprintf("item:%d:content:", index)) {
+				break
+			}
+			item := objectValue(rawItem)
+			if stringValue(item["type"]) == "message" {
+				continue
+			}
+			previous := s.Blocks[fmt.Sprintf("item:%d", index)]
+			if previous == nil && rawStringValue(item["id"]) != "" {
+				previous = s.Blocks["item:"+rawStringValue(item["id"])]
+			}
+			if previous == nil || previous.Open || previous.Index >= block.Index {
+				return fmt.Errorf("Copilot Responses anonymous text cannot precede a terminal tool or reasoning item")
+			}
+		}
+		for _, candidate := range terminalKeys {
+			if candidate == matched {
+				break
+			}
+			var previous *responsesClaudeBlock
+			for source, owner := range terminalOwners {
+				if owner == candidate && s.Blocks[source] != nil {
+					previous = s.Blocks[source]
+				}
+			}
+			for source, owner := range bindings {
+				if owner == candidate && s.Blocks[source] != nil {
+					previous = s.Blocks[source]
+				}
+			}
+			if previous == nil || !previous.TextFinished || previous.Index >= block.Index {
+				return fmt.Errorf("Copilot Responses anonymous text cannot preserve terminal part ordering")
+			}
+		}
+	}
+	for source, target := range bindings {
+		if block := s.Blocks[source]; block != nil {
+			s.Blocks[target] = block
+			delete(s.Blocks, source)
+		}
+		if part := s.TextParts[source]; part != nil {
+			s.TextParts[target] = part
+			delete(s.TextParts, source)
+		}
+		if text, ok := s.BufferedText[source]; ok {
+			s.BufferedText[target] = text
+			delete(s.BufferedText, source)
+		}
+		if citations, ok := s.BufferedCitations[source]; ok {
+			s.BufferedCitations[target] = citations
+			delete(s.BufferedCitations, source)
 		}
 	}
 	for key, part := range s.TextParts {
@@ -851,7 +996,12 @@ func itemKey(payload map[string]any) string {
 }
 
 func contentKey(payload map[string]any) string {
-	return itemKey(payload) + ":content:" + firstNonEmptyString(numberKey(payload["content_index"]), "0")
+	key := itemKey(payload)
+	index := numberKey(payload["content_index"])
+	if key != "item:" && index == "" {
+		index = "0"
+	}
+	return key + ":content:" + index
 }
 
 func numberKey(value any) string {

@@ -36,7 +36,9 @@ type claudeHostedSearchStreamCall struct {
 	SawDelta        bool
 	Results         json.RawMessage
 	Part            map[string]any
+	CallStopped     bool
 	ResultSeen      bool
+	ResultStopped   bool
 }
 
 func claudeStreamToResponses(ctx context.Context, model string, original, translated, frame []byte, state *any) ([][]byte, error) {
@@ -270,7 +272,7 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 		case "web_search_tool_result":
 			id := rawStringValue(block["tool_use_id"])
 			call := s.Searches[id]
-			if call == nil || call.ResultSeen {
+			if call == nil || !call.CallStopped || call.ResultSeen {
 				return fmt.Errorf("Claude stream web search result has no unique matching call")
 			}
 			results, err := validateClaudeHostedSearchResult(block, id)
@@ -284,7 +286,6 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 				return fmt.Errorf("decode Claude stream web search result")
 			}
 			s.Content = append(s.Content, map[string]any{"type": "web_search_tool_result", "tool_use_id": id, "content": content})
-			s.PendingResult = ""
 		default:
 			if typ == "text" {
 				if _, ok := block["text"].(string); !ok {
@@ -303,6 +304,9 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 		delta := objectValue(payload["delta"])
 		call := s.SearchesByBlock[index]
 		if call != nil {
+			if call.CallStopped {
+				return fmt.Errorf("Claude stream changed a completed web search call")
+			}
 			if stringValue(delta["type"]) != "input_json_delta" {
 				return fmt.Errorf("Claude stream web search input has an unsupported delta")
 			}
@@ -349,6 +353,14 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 		}
 	case "content_block_stop":
 		index := intValue(payload["index"])
+		if block := s.Blocks[index]; stringValue(block["type"]) == "web_search_tool_result" {
+			call := s.Searches[rawStringValue(block["tool_use_id"])]
+			if call == nil || !call.ResultSeen || call.ResultStopped {
+				return fmt.Errorf("Claude stream completed a web search result without an open block")
+			}
+			call.ResultStopped = true
+			s.PendingResult = ""
+		}
 		if stringValue(s.Blocks[index]["type"]) == "text" {
 			if !s.TextBlockOpen || s.TextBlockIndex != index {
 				return fmt.Errorf("Claude stream completed text without an open block")
@@ -356,6 +368,9 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 			s.TextBlockOpen = false
 		}
 		if call := s.SearchesByBlock[index]; call != nil {
+			if call.CallStopped {
+				return fmt.Errorf("Claude stream repeated a web search call stop")
+			}
 			if call.SawDelta {
 				decoder := json.NewDecoder(strings.NewReader(call.Input.String()))
 				start, err := decoder.Token()
@@ -388,6 +403,7 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 				return fmt.Errorf("Claude stream web search query is incomplete")
 			}
 			call.Part["input"] = map[string]any{"query": call.Query}
+			call.CallStopped = true
 			s.PendingResult = call.ID
 		}
 	case "message_stop":
@@ -398,7 +414,7 @@ func (s *claudeHostedSearchStreamState) observe(event string, data []byte, done 
 			return fmt.Errorf("Claude web search call has no result")
 		}
 		for _, call := range s.Searches {
-			if !call.ResultSeen || call.Query == "" {
+			if !call.CallStopped || !call.ResultStopped || call.Query == "" {
 				return fmt.Errorf("Claude web search call/result pair is incomplete")
 			}
 		}
@@ -482,7 +498,7 @@ func restoreClaudeStreamSearchItem(data []byte, path string, item map[string]any
 	responsesID := rawStringValue(item["id"])
 	callID := strings.TrimPrefix(responsesID, "ws_")
 	call := searches[callID]
-	if call == nil || !call.ResultSeen || call.Query == "" {
+	if call == nil || !call.ResultStopped || call.Query == "" {
 		return nil, fmt.Errorf("translated Responses search item has no complete Claude pair")
 	}
 	updated, err := sjson.SetBytes(data, path+".action.query", call.Query)
