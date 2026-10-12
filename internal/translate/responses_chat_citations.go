@@ -68,7 +68,11 @@ func prepareResponsesChatCitations(body []byte) ([]byte, string, []responsesChat
 			}
 			partRunes := int64(utf8.RuneCountInString(text))
 			annotations := part.Get("annotations")
-			for _, annotation := range annotations.Array() {
+			var annotationItems []gjson.Result
+			if annotations.IsArray() {
+				annotationItems = annotations.Array()
+			}
+			for _, annotation := range annotationItems {
 				object, err := decodeObject([]byte(annotation.Raw))
 				if err != nil {
 					return nil, "", nil, fmt.Errorf("decode Responses URL citation")
