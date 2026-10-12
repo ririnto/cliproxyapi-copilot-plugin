@@ -84,6 +84,13 @@ func claudeRequestToResponses(model string, body []byte, stream bool) ([]byte, e
 		}
 	}
 	if choice, ok := root["tool_choice"].(map[string]any); ok {
+		if value, exists := choice["disable_parallel_tool_use"]; exists {
+			disable, okBoolean := value.(bool)
+			if !okBoolean {
+				return nil, fmt.Errorf("Claude tool_choice.disable_parallel_tool_use must be a boolean")
+			}
+			out["parallel_tool_calls"] = !disable
+		}
 		switch stringValue(choice["type"]) {
 		case "auto":
 			out["tool_choice"] = "auto"
