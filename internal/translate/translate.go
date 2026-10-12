@@ -290,13 +290,6 @@ func response(ctx context.Context, from, to sdktranslator.Format, model string, 
 		return responsesResponseToClaude(model, body)
 	}
 	if from == sdktranslator.FormatOpenAIResponse && to == sdktranslator.FormatOpenAI {
-		root, err := decodeObject(body)
-		if err != nil {
-			return nil, fmt.Errorf("decode Responses response for translation")
-		}
-		if err := validateResponsesOutputForChat(root); err != nil {
-			return nil, err
-		}
 		return responsesResponseToChat(ctx, model, original, translated, body)
 	}
 	if from == sdktranslator.FormatOpenAI && to == sdktranslator.FormatOpenAIResponse {

@@ -42,7 +42,7 @@ type claudeHostedSearchStreamCall struct {
 }
 
 func claudeStreamToResponses(ctx context.Context, model string, original, translated, frame []byte, state *any) ([][]byte, error) {
-	if err := validateClaudeStreamFrame(frame); err != nil {
+	if err := validateClaudeStreamFrame(frame, sdktranslator.FormatOpenAIResponse); err != nil {
 		return nil, err
 	}
 	event, data, done, err := parseSSEFrame(frame)
