@@ -54,11 +54,11 @@ func (s *Service) Configure(raw []byte) error {
 	s.config = cfg
 	s.configGeneration++
 	s.tokenMu.Lock()
-	clear(s.tokenEntries)
+	clearTokenCache(s.tokenEntries)
 	s.tokenMu.Unlock()
 	s.configMu.Unlock()
 	s.modelMu.Lock()
-	clear(s.modelEntries)
+	clearModelCache(s.modelEntries)
 	s.modelMu.Unlock()
 	s.clearReasoningReplay()
 	return nil
@@ -81,10 +81,10 @@ func (s *Service) Shutdown() {
 	clear(s.oauthSession)
 	s.oauthMu.Unlock()
 	s.tokenMu.Lock()
-	clear(s.tokenEntries)
+	clearTokenCache(s.tokenEntries)
 	s.tokenMu.Unlock()
 	s.modelMu.Lock()
-	clear(s.modelEntries)
+	clearModelCache(s.modelEntries)
 	s.modelMu.Unlock()
 	s.clearReasoningReplay()
 }
