@@ -339,6 +339,11 @@ func validateResponsesMessage(item map[string]any, target sdktranslator.Format) 
 		if err == nil {
 			err = validateResponsesAnnotations(part, target)
 		}
+		if err == nil && hasMeaningfulValue(part["annotations"]) {
+			if role != "assistant" || typ != "output_text" && typ != "text" || rawStringValue(part["text"]) == "" {
+				err = fmt.Errorf("Responses citations require nonempty assistant text")
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -376,9 +381,8 @@ func validateResponsesAnnotations(part map[string]any, target sdktranslator.Form
 		return fmt.Errorf("Responses annotations have an unsupported shape")
 	}
 	for _, rawAnnotation := range annotations {
-		annotation, ok := rawAnnotation.(map[string]any)
-		if !ok || stringValue(annotation["encrypted_index"]) == "" {
-			return fmt.Errorf("Responses annotation cannot be replayed by Claude Messages")
+		if err := validateClaudeCitation(rawAnnotation); err != nil {
+			return fmt.Errorf("Responses annotation cannot be replayed by Claude Messages: %w", err)
 		}
 	}
 	return nil
@@ -479,7 +483,7 @@ func validateResponsesWebSearchCall(item map[string]any) error {
 		return fmt.Errorf("Responses web search history has no query")
 	}
 	if result, ok := item["results"].(map[string]any); ok {
-		if result["type"] != "web_search_tool_result_error" || stringValue(result["error_code"]) == "" {
+		if err := rejectFields(result, "type", "error_code"); err != nil || result["type"] != "web_search_tool_result_error" || stringValue(result["error_code"]) == "" {
 			return fmt.Errorf("Responses web search results have an unsupported error shape")
 		}
 		return nil
@@ -494,6 +498,9 @@ func validateResponsesWebSearchCall(item map[string]any) error {
 			return fmt.Errorf("Responses web search results contain an unsupported entry")
 		}
 		if entry["type"] == "web_search_tool_result_error" && stringValue(entry["error_code"]) != "" {
+			if err := rejectFields(entry, "type", "error_code"); err != nil {
+				return fmt.Errorf("Responses web search results have an unsupported error shape")
+			}
 			continue
 		}
 		if entry["type"] != "web_search_result" || stringValue(entry["url"]) == "" {
@@ -501,6 +508,48 @@ func validateResponsesWebSearchCall(item map[string]any) error {
 		}
 		if stringValue(entry["encrypted_content"]) == "" {
 			return fmt.Errorf("Responses web search result lacks its replay token")
+		}
+		for _, field := range []string{"title", "page_age", "snippet"} {
+			if value, exists := entry[field]; exists {
+				if _, ok := value.(string); !ok {
+					return fmt.Errorf("Responses web search result field %q has an unsupported value", field)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateResponsesWebSearchProgress(item map[string]any, completed bool) error {
+	if completed {
+		return validateResponsesWebSearchCall(item)
+	}
+	id := rawStringValue(item["id"])
+	const prefix = "ws_srvtoolu_"
+	if !strings.HasPrefix(id, prefix) || len(id) == len(prefix) {
+		return fmt.Errorf("Responses web search stream requires a Claude server tool item ID")
+	}
+	for _, character := range id[len(prefix):] {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_') {
+			return fmt.Errorf("Responses web search stream item ID cannot be preserved by Claude Messages")
+		}
+	}
+	if err := rejectFields(item, "id", "type", "status", "action"); err != nil {
+		return fmt.Errorf("Responses web search stream item has an unsupported field")
+	}
+	if stringValue(item["type"]) != "web_search_call" || stringValue(item["status"]) != "in_progress" {
+		return fmt.Errorf("Responses web search stream item has an unsupported status")
+	}
+	action, ok := item["action"].(map[string]any)
+	if !ok || action["type"] != "search" {
+		return fmt.Errorf("Responses web search stream item has an unsupported action")
+	}
+	if err := rejectFields(action, "type", "query"); err != nil {
+		return fmt.Errorf("Responses web search stream action has an unsupported field")
+	}
+	if query, exists := action["query"]; exists {
+		if _, ok := query.(string); !ok {
+			return fmt.Errorf("Responses web search stream query has an unsupported value")
 		}
 	}
 	return nil
@@ -589,6 +638,7 @@ func validateResponsesOutputForClaude(root map[string]any) error {
 		}
 		return nil
 	}
+	webSearchIDs := make(map[string]struct{})
 	for _, rawItem := range items {
 		item, ok := rawItem.(map[string]any)
 		if !ok {
@@ -601,7 +651,7 @@ func validateResponsesOutputForClaude(root map[string]any) error {
 		var err error
 		switch typ {
 		case "message":
-			err = validateClaudeResponseMessage(item)
+			err = validateResponsesResponseMessage(item, sdktranslator.FormatClaude)
 		case "reasoning":
 			err = validateResponsesReasoning(item)
 		case "function_call":
@@ -618,7 +668,12 @@ func validateResponsesOutputForClaude(root map[string]any) error {
 				}
 			}
 		case "web_search_call":
-			err = fmt.Errorf("Responses web search output cannot be represented by this Claude response adapter")
+			err = validateResponsesWebSearchCall(item)
+			id := rawStringValue(item["id"])
+			if _, exists := webSearchIDs[id]; exists {
+				err = fmt.Errorf("Responses web search output has an ambiguous item ID")
+			}
+			webSearchIDs[id] = struct{}{}
 		case "function_call_output", "custom_tool_call_output":
 			err = fmt.Errorf("Responses tool output item cannot appear in an assistant response")
 		default:
@@ -657,7 +712,7 @@ func validateResponsesOutputForChat(root map[string]any) error {
 		var err error
 		switch typ {
 		case "message":
-			err = validateClaudeResponseMessage(item)
+			err = validateResponsesResponseMessage(item, sdktranslator.FormatOpenAI)
 		case "reasoning":
 			err = validateResponsesReasoning(item)
 		case "function_call":
@@ -694,6 +749,14 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 	if event == "" {
 		event = stringValue(payload["type"])
 	}
+	if target == sdktranslator.FormatOpenAI {
+		if err := validateResponsesOutputForChat(objectValue(payload["response"])); err != nil {
+			return err
+		}
+		if strings.HasPrefix(event, "response.web_search_call.") {
+			return fmt.Errorf("Responses web_search_call stream events cannot be represented by Chat")
+		}
+	}
 	validateItem := func(item map[string]any) error {
 		root := map[string]any{"output": []any{item}}
 		if target == sdktranslator.FormatClaude {
@@ -702,7 +765,7 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 		return validateResponsesOutputForChat(root)
 	}
 	validatePart := func(part map[string]any) error {
-		return validateClaudeResponseMessage(map[string]any{"content": []any{part}})
+		return validateResponsesResponseMessage(map[string]any{"content": []any{part}}, target)
 	}
 	switch event {
 	case "response.output_item.added", "response.output_item.done":
@@ -712,6 +775,9 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 				return fmt.Errorf("Responses stream contains an unsupported output item")
 			}
 			return nil
+		}
+		if target == sdktranslator.FormatClaude && stringValue(item["type"]) == "web_search_call" {
+			return validateResponsesWebSearchProgress(item, event == "response.output_item.done")
 		}
 		return validateItem(item)
 	case "response.content_part.added", "response.content_part.done":
@@ -727,13 +793,18 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 		if _, ok := payload["delta"].(string); !ok && hasMeaningfulValue(payload["delta"]) {
 			return fmt.Errorf("Responses stream contains an unsupported text delta")
 		}
-	case "response.completed":
+	case "response.completed", "response.incomplete":
 		response := objectValue(payload["response"])
 		if target == sdktranslator.FormatClaude {
 			return validateResponsesOutputForClaude(response)
 		}
 		return validateResponsesOutputForChat(response)
-	case "response.created", "response.in_progress", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta", "response.failed", "response.incomplete", "error", "":
+	case "response.output_text.annotation.added":
+		if target == sdktranslator.FormatClaude {
+			return validateClaudeCitation(payload["annotation"])
+		}
+		return validateResponsesAnnotations(map[string]any{"annotations": payload["annotation"]}, target)
+	case "response.created", "response.in_progress", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta", "response.failed", "error", "":
 	default:
 		if strings.HasPrefix(event, "response.") && hasMeaningfulValue(payload["delta"]) {
 			return fmt.Errorf("unsupported nonempty Responses stream event %q", event)
@@ -742,7 +813,7 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 	return nil
 }
 
-func validateClaudeStreamFrame(frame []byte) error {
+func validateClaudeStreamFrame(frame []byte, target sdktranslator.Format) error {
 	_, data, done, err := parseSSEFrame(frame)
 	if err != nil || done || len(data) == 0 {
 		return err
@@ -750,6 +821,11 @@ func validateClaudeStreamFrame(frame []byte) error {
 	payload, err := decodeObject(data)
 	if err != nil {
 		return fmt.Errorf("decode Claude Messages stream event")
+	}
+	if target == sdktranslator.FormatOpenAI {
+		if err := validateClaudeHostedStateForChat(payload); err != nil {
+			return err
+		}
 	}
 	switch stringValue(payload["type"]) {
 	case "content_block_start":
@@ -765,6 +841,14 @@ func validateClaudeStreamFrame(frame []byte) error {
 		case "text":
 			if _, ok := block["text"].(string); !ok && hasMeaningfulValue(block["text"]) {
 				return fmt.Errorf("Claude stream text block has an unsupported value")
+			}
+			if citations, exists := block["citations"]; exists && hasMeaningfulValue(citations) {
+				if rawStringValue(block["text"]) == "" {
+					return fmt.Errorf("Claude stream citations require nonempty text")
+				}
+				if err := validateClaudeCitations(citations); err != nil {
+					return err
+				}
 			}
 		case "thinking":
 			if _, ok := block["thinking"].(string); !ok && hasMeaningfulValue(block["thinking"]) {
@@ -823,7 +907,28 @@ func validateClaudeStreamFrame(frame []byte) error {
 	return nil
 }
 
-func validateClaudeResponseMessage(item map[string]any) error {
+func validateClaudeHostedStateForChat(payload map[string]any) error {
+	switch stringValue(payload["type"]) {
+	case "content_block_start":
+		block := objectValue(payload["content_block"])
+		switch stringValue(block["type"]) {
+		case "server_tool_use", "web_search_tool_result":
+			return fmt.Errorf("Claude %s cannot be represented by Chat", stringValue(block["type"]))
+		case "text":
+			if hasMeaningfulValue(block["citations"]) {
+				return fmt.Errorf("Claude citations cannot be represented by Chat")
+			}
+		}
+	case "content_block_delta":
+		delta := objectValue(payload["delta"])
+		if stringValue(delta["type"]) == "citations_delta" && hasMeaningfulValue(delta["citation"]) {
+			return fmt.Errorf("Claude citations_delta cannot be represented by Chat")
+		}
+	}
+	return nil
+}
+
+func validateResponsesResponseMessage(item map[string]any, target sdktranslator.Format) error {
 	content := item["content"]
 	if content == nil || !hasMeaningfulValue(content) {
 		return nil
@@ -857,8 +962,13 @@ func validateClaudeResponseMessage(item map[string]any) error {
 				return fmt.Errorf("Responses message output text has an unsupported value")
 			}
 		}
+		if err := validateResponsesAnnotations(part, target); err != nil {
+			return err
+		}
 		if hasMeaningfulValue(part["annotations"]) {
-			return fmt.Errorf("Responses output annotations cannot be represented by this endpoint")
+			if typ != "output_text" && typ != "text" || rawStringValue(text) == "" {
+				return fmt.Errorf("Responses citations require nonempty text output")
+			}
 		}
 	}
 	return nil
