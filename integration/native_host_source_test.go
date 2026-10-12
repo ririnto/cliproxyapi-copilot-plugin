@@ -102,7 +102,7 @@ func newNativeHostSourceMakeFixture(t *testing.T) *nativeHostSourceMakeFixture {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repository with spaces")
 	bin := filepath.Join(root, "fake bin")
-	if err := os.MkdirAll(filepath.Join(repo, "scripts"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repo, "integration"), 0o755); err != nil {
 		t.Fatalf("create fixture repository: %v", err)
 	}
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -130,7 +130,7 @@ func newNativeHostSourceMakeFixture(t *testing.T) *nativeHostSourceMakeFixture {
 	}
 	fixture.writeExecutable(t, filepath.Join(bin, "docker"), "#!/bin/sh\nprintf '%s\\000' \"$@\" >>\"$DOCKER_CAPTURE\"\nprintf '\\n' >>\"$DOCKER_CAPTURE\"\n")
 	fixture.writeExecutable(t, filepath.Join(bin, "uname"), "#!/bin/sh\nif [ \"${1:-}\" = -s ]; then printf 'Linux\\n'; else exec /usr/bin/uname \"$@\"; fi\n")
-	fixture.writeExecutable(t, filepath.Join(repo, "scripts", "test-native-host.sh"), "#!/bin/sh\nprintf '%s|%s\\n' \"$NATIVE_HOST_GOOS/$NATIVE_HOST_GOARCH\" \"$NATIVE_HOST_IMAGE\" >>\"$NATIVE_HOST_RUNNER_CAPTURE\"\n")
+	fixture.writeExecutable(t, filepath.Join(repo, "integration", "test-native-host.sh"), "#!/bin/sh\nprintf '%s|%s\\n' \"$NATIVE_HOST_GOOS/$NATIVE_HOST_GOARCH\" \"$NATIVE_HOST_IMAGE\" >>\"$NATIVE_HOST_RUNNER_CAPTURE\"\n")
 	return fixture
 }
 
@@ -253,7 +253,7 @@ func assertNativeHostDockerArgs(t *testing.T, arguments []string, fixture *nativ
 			t.Errorf("Docker arguments omit %q: %#v", expected, arguments)
 		}
 	}
-	if len(arguments) < 2 || arguments[len(arguments)-2] != "golang:1.27-bookworm" || arguments[len(arguments)-1] != "scripts/prepare-native-host.sh" {
+	if len(arguments) < 2 || arguments[len(arguments)-2] != "golang:1.27-bookworm" || arguments[len(arguments)-1] != "integration/prepare-native-host.sh" {
 		t.Errorf("Docker image or host preparation command changed: %#v", arguments)
 	}
 	if !slicesContainsPair(arguments, "-w", "/src") {

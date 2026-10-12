@@ -55,7 +55,7 @@ INTEGRATION_BINARY="$PREPARED_DIR/integration.test"
 for artifact in "$PLUGIN" "$CPA_BINARY" "$INTEGRATION_BINARY"; do
   if [ ! -f "$artifact" ]; then
     printf 'error: required native host artifact is missing: %s\n' "$artifact" >&2
-    printf 'Build the plugin and run scripts/prepare-native-host.sh first.\n' >&2
+    printf 'Build the plugin and run integration/prepare-native-host.sh first.\n' >&2
     exit 1
   fi
 done
