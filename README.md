@@ -131,10 +131,18 @@ make test-native
 For opt-in calls against real Copilot models and isolated Claude Code/Codex client checks, see
 [`docs/live-copilot-validation.md`](docs/live-copilot-validation.md).
 
-`make test-native` prepares a CLIProxyAPI host from the version or maintained-fork
-replacement selected in `go.mod` and compiles the integration test executable.
-Set `NATIVE_HOST_SOURCE` to a local CLIProxyAPI checkout to test unreleased host
-changes; the script verifies its module identity and labels it as a local source.
+`make test-native` and `make prepare-runtime-host` prepare a CLIProxyAPI host from the version or maintained-fork replacement selected in `go.mod` and compile the integration test executable.
+Set `NATIVE_HOST_SOURCE` to a readable local CLIProxyAPI checkout to use unreleased host changes.
+Relative paths are resolved from this repository's root.
+Container preparation mounts that checkout read-only at `/native-host-source`, then verifies its module identity.
+For example:
+
+```sh
+NATIVE_HOST_SOURCE=../CLIProxyAPI make test-native
+NATIVE_HOST_SOURCE="../CLIProxyAPI checkout" make prepare-runtime-host
+```
+
+When `NATIVE_HOST_SOURCE` is unset, preparation uses the published host source selected in `go.mod`.
 Preparation may download dependencies.
 The plugin uses the official v8.0.23 SDK and ABI. Payload-rule finalization requires
 the published maintained host replacement selected in `go.mod`; the official
@@ -208,8 +216,9 @@ cliproxyapi-copilot_0.3.1_linux_amd64.zip
 checksums.txt
 ```
 
-The ZIP contains only `cliproxyapi-copilot.so` at its root, matching the
-official CLIProxyAPI Plugins Store requirements.
+The ZIP contains `cliproxyapi-copilot.so` and `cliproxyapi-copilot.host-requirements.json` at its root.
+The shared library matches the official CLIProxyAPI Plugins Store requirements.
+The JSON records the required host callback and paired host module source.
 
 ## Isolated deployment
 
