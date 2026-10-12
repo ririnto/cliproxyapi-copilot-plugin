@@ -753,6 +753,11 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 		if err := validateResponsesOutputForChat(objectValue(payload["response"])); err != nil {
 			return err
 		}
+		for _, rawItem := range arrayValue(objectValue(payload["response"])["output"]) {
+			if err := rejectResponsesChatStreamCitations(objectValue(rawItem)); err != nil {
+				return err
+			}
+		}
 		if strings.HasPrefix(event, "response.web_search_call.") {
 			return fmt.Errorf("Responses web_search_call stream events cannot be represented by Chat")
 		}
@@ -762,9 +767,15 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 		if target == sdktranslator.FormatClaude {
 			return validateResponsesOutputForClaude(root)
 		}
+		if err := rejectResponsesChatStreamCitations(item); err != nil {
+			return err
+		}
 		return validateResponsesOutputForChat(root)
 	}
 	validatePart := func(part map[string]any) error {
+		if target == sdktranslator.FormatOpenAI && hasMeaningfulValue(part["annotations"]) {
+			return fmt.Errorf("Responses annotations cannot be represented by Chat streaming")
+		}
 		return validateResponsesResponseMessage(map[string]any{"content": []any{part}}, target)
 	}
 	switch event {
@@ -800,10 +811,13 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 		}
 		return validateResponsesOutputForChat(response)
 	case "response.output_text.annotation.added":
+		if !hasMeaningfulValue(payload["annotation"]) {
+			return nil
+		}
 		if target == sdktranslator.FormatClaude {
 			return validateClaudeCitation(payload["annotation"])
 		}
-		return validateResponsesAnnotations(map[string]any{"annotations": payload["annotation"]}, target)
+		return fmt.Errorf("Responses annotations cannot be represented by Chat streaming")
 	case "response.created", "response.in_progress", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta", "response.failed", "error", "":
 	default:
 		if strings.HasPrefix(event, "response.") && hasMeaningfulValue(payload["delta"]) {
@@ -962,13 +976,42 @@ func validateResponsesResponseMessage(item map[string]any, target sdktranslator.
 				return fmt.Errorf("Responses message output text has an unsupported value")
 			}
 		}
-		if err := validateResponsesAnnotations(part, target); err != nil {
+		if err := validateResponsesResponseAnnotations(part, target); err != nil {
 			return err
 		}
 		if hasMeaningfulValue(part["annotations"]) {
 			if typ != "output_text" && typ != "text" || rawStringValue(text) == "" {
 				return fmt.Errorf("Responses citations require nonempty text output")
 			}
+		}
+	}
+	return nil
+}
+
+func validateResponsesResponseAnnotations(part map[string]any, target sdktranslator.Format) error {
+	if target != sdktranslator.FormatOpenAI {
+		return validateResponsesAnnotations(part, target)
+	}
+	value := part["annotations"]
+	if !hasMeaningfulValue(value) {
+		return nil
+	}
+	annotations, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("Responses annotations have an unsupported shape")
+	}
+	for _, annotation := range annotations {
+		if _, err := responsesURLCitation(annotation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectResponsesChatStreamCitations(item map[string]any) error {
+	for _, rawPart := range arrayValue(item["content"]) {
+		if hasMeaningfulValue(objectValue(rawPart)["annotations"]) {
+			return fmt.Errorf("Responses annotations cannot be represented by Chat streaming")
 		}
 	}
 	return nil
