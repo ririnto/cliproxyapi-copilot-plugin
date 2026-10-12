@@ -14,9 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/arthur-sommer-etc/cliproxyapi-copilot-plugin/internal/redact"
 )
@@ -142,19 +140,21 @@ func testLiveCLIClientWithGate(t *testing.T, client, base string, gate *liveServ
 		t.Errorf("%s CLI is not installed", client)
 		return
 	}
-	versionCommand := exec.Command(path, "--version")
-	versionOutput, err := versionCommand.Output()
+	var versionOutput bytes.Buffer
+	_, err = runLiveClient(t, liveClientStartupTimeout, path, []string{"--version"}, func(command *exec.Cmd) {
+		command.Stdout = &versionOutput
+	})
 	if err != nil {
 		t.Errorf("%s CLI version check failed", client)
 		return
 	}
 	if client == "codex" && phase == "L-native-stream-revalidation" {
 		expected := strings.TrimSpace(os.Getenv("CPA_LIVE_CODEX_EXPECTED_VERSION"))
-		if expected == "" || strings.TrimSpace(string(versionOutput)) != "codex-cli "+expected {
+		if expected == "" || strings.TrimSpace(versionOutput.String()) != "codex-cli "+expected {
 			t.Fatal("selected original Codex version did not match its declared version")
 		}
 	}
-	t.Logf("client=%s version=%s", client, strings.TrimSpace(string(versionOutput)))
+	t.Logf("client=%s version=%s", client, strings.TrimSpace(versionOutput.String()))
 	root := t.TempDir()
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal("could not restrict temporary client home")
@@ -297,8 +297,6 @@ func TestLiveCapturedCLISelectedClients(t *testing.T) {
 
 func runLiveCLIWithEffort(t *testing.T, path, client, base, root, prompt, effort string) liveCLIResult {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	var args []string
 	if client == "claude" {
 		args = []string{"--safe-mode", "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk", "--tools", "WebSearch,Agent", "--allowedTools", "WebSearch,Agent", "--model", "claude-haiku-5.5", prompt}
@@ -311,22 +309,14 @@ func runLiveCLIWithEffort(t *testing.T, path, client, base, root, prompt, effort
 			args = append(args[:len(args)-1], append([]string{"--config", "model_reasoning_effort=\"" + effort + "\""}, args[len(args)-1:]...)...)
 		}
 	}
-	command := exec.CommandContext(ctx, path, args...)
-	command.Dir = root
-	command.Env = liveCLIEnvironment(client, base, root)
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.Cancel = func() error {
-		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	}
-	command.WaitDelay = 5 * time.Second
 	stdout := &liveCLIBuffer{}
 	stderr := &liveCLIBuffer{}
-	command.Stdout = stdout
-	command.Stderr = stderr
-	err := command.Run()
-	if command.Process != nil {
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	}
+	command, err := runLiveClient(t, liveClientTimeout, path, args, func(command *exec.Cmd) {
+		command.Dir = root
+		command.Env = liveCLIEnvironment(client, base, root)
+		command.Stdout = stdout
+		command.Stderr = stderr
+	})
 	if captureDir := liveDebugArtifactDirectory(t, "cli-"+client); captureDir != "" {
 		for name, body := range map[string][]byte{"stdout.jsonl": stdout.bytes, "stderr.txt": stderr.bytes, "prompt.txt": []byte(prompt)} {
 			body = []byte(redact.Text(string(body), liveCopilotClientKey))
@@ -347,7 +337,7 @@ func runLiveCLIWithEffort(t *testing.T, path, client, base, root, prompt, effort
 	} else {
 		result.exitCode = -1
 	}
-	result.timedOut = ctx.Err() != nil
+	result.timedOut = errors.Is(err, context.DeadlineExceeded)
 	if err != nil && result.exitCode == 0 {
 		result.exitCode = -1
 	}

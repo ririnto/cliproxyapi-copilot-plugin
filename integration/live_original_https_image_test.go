@@ -39,15 +39,18 @@ func TestLiveOriginalCodexHTTPSImage(t *testing.T) {
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 		t.Fatal("an existing private original app-server image driver is required")
 	}
-	version, err := exec.Command(os.Getenv("CPA_LIVE_CODEX_BINARY"), "--version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != "codex-cli "+os.Getenv("CPA_LIVE_CODEX_EXPECTED_VERSION") {
+	var versionOutput bytes.Buffer
+	_, versionErr := runLiveClient(t, liveClientStartupTimeout, os.Getenv("CPA_LIVE_CODEX_BINARY"), []string{"--version"}, func(command *exec.Cmd) {
+		command.Stdout = &versionOutput
+	})
+	if versionErr != nil || strings.TrimSpace(versionOutput.String()) != "codex-cli "+os.Getenv("CPA_LIVE_CODEX_EXPECTED_VERSION") {
 		t.Fatal("selected original app-server version did not match its declared version")
 	}
 	root, err := os.MkdirTemp(os.Getenv("CPA_LIVE_COPILOT_DEBUG_DIR"), "original-https-image-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	summary := map[string]any{"claim_cell": liveOriginalHTTPSImageKey, "cli_version": strings.TrimSpace(string(version)), "image_url": imageURL, "stage": "host-start", "passed": false}
+	summary := map[string]any{"claim_cell": liveOriginalHTTPSImageKey, "cli_version": strings.TrimSpace(versionOutput.String()), "image_url": imageURL, "stage": "host-start", "passed": false}
 	defer func() {
 		if err := writeOriginalInterruptJSON(filepath.Join(root, "validation-summary.json"), summary); err != nil {
 			t.Error("could not retain original image validation summary")
@@ -89,10 +92,10 @@ func TestLiveOriginalCodexHTTPSImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary["stage"] = "original-app-server"
-	command := exec.Command(python, driver, "--base-url", relayURL, "--output-root", root, "--image-url", imageURL)
-	command.Env = append(os.Environ(), "TASK_PROXY_API_KEY="+liveCopilotClientKey)
-	command.Stdout, command.Stderr = stdout, stderr
-	runErr := command.Run()
+	_, runErr := runLiveClient(t, liveClientTimeout, python, []string{driver, "--base-url", relayURL, "--output-root", root, "--image-url", imageURL, "--supervised"}, func(command *exec.Cmd) {
+		command.Env = append(os.Environ(), "TASK_PROXY_API_KEY="+liveCopilotClientKey)
+		command.Stdout, command.Stderr = stdout, stderr
+	})
 	_ = stdout.Close()
 	_ = stderr.Close()
 	if err := stopRelay(); err != nil || relay.log.failure() != nil {
