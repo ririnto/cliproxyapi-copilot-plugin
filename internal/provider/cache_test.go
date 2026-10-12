@@ -2,9 +2,30 @@ package provider
 
 import (
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 )
+
+func TestForcedModelRefreshPrunesExpiredAccountsOnFailure(t *testing.T) {
+	service, storage, _ := serviceWithCachedModels(t, []upstreamModel{{ID: "valid-model"}})
+	host := newDirectOAuthTestHost()
+	host.catalogStatus = http.StatusServiceUnavailable
+	service.host = host
+	service.modelEntries["expired-account"] = modelCacheEntry{
+		ExpiresAt: service.now().Add(-time.Second),
+		Models:    []upstreamModel{{ID: "stale-model"}},
+	}
+	if _, _, err := service.models(t.Context(), "synthetic-callback", "auth", storage, true); err == nil {
+		t.Fatal("forced model discovery unexpectedly succeeded")
+	}
+	if _, retained := service.modelEntries["expired-account"]; retained {
+		t.Fatal("failed forced refresh retained an expired account catalogue")
+	}
+	if _, retained := service.modelEntries["auth"]; !retained {
+		t.Fatal("failed forced refresh removed a still-valid account catalogue")
+	}
+}
 
 func TestPruneTokenCacheRemovesExpiredEntriesAndBoundsChurn(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)

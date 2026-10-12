@@ -149,14 +149,12 @@ func (s *Service) models(ctx context.Context, callbackID, authID string, storage
 		key = fingerprint
 	}
 	now := s.now()
-	if !force {
-		s.modelMu.Lock()
-		pruneModelCache(s.modelEntries, now)
-		cached, ok := s.modelEntries[key]
-		s.modelMu.Unlock()
-		if ok && cached.Fingerprint == fingerprint && cached.APIBaseURL == token.APIBaseURL && effectiveAuthMode(cached.Mode) == effectiveAuthMode(token.Mode) && cached.ConfigGeneration == token.ConfigGeneration && cached.ExpiresAt.After(now) {
-			return cloneUpstreamModels(cached.Models), token, nil
-		}
+	s.modelMu.Lock()
+	pruneModelCache(s.modelEntries, now)
+	cached, ok := s.modelEntries[key]
+	s.modelMu.Unlock()
+	if !force && ok && cached.Fingerprint == fingerprint && cached.APIBaseURL == token.APIBaseURL && effectiveAuthMode(cached.Mode) == effectiveAuthMode(token.Mode) && cached.ConfigGeneration == token.ConfigGeneration && cached.ExpiresAt.After(now) {
+		return cloneUpstreamModels(cached.Models), token, nil
 	}
 
 	resp, errDo := s.host.Do(ctx, callbackID, transport.Request{
