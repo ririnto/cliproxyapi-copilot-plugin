@@ -54,7 +54,7 @@ func TestOriginalCodexDriverTimesOutAndReapsStalledAppServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	_, runErr := runLiveClient(t, 10*time.Second, python, []string{driver, "--base-url", "http://127.0.0.1:12345/v1", "--output-root", root, "--image-url", "https://images.invalid/test.png", "--rpc-timeout", "0.1"}, func(command *exec.Cmd) {
+	_, runErr := runLiveClient(t, 10*time.Second, python, []string{driver, "--base-url", "http://127.0.0.1:12345/v1", "--output-root", root, "--image-url", "https://images.invalid/test.png", "--rpc-timeout", "0.1", "--supervised"}, func(command *exec.Cmd) {
 		command.Env = append(os.Environ(), "CPA_LIVE_CODEX_BINARY="+fakeBinary, "CPA_LIVE_CODEX_EXPECTED_VERSION=0.0.1", "CPA_LIVE_CODEX_CATALOG="+catalog, "CPA_LIVE_CODEX_SANDBOX="+profile, "TASK_PROXY_API_KEY=fake-test-key")
 		command.Stdout, command.Stderr = &stdout, &stderr
 	})
@@ -67,6 +67,66 @@ func TestOriginalCodexDriverTimesOutAndReapsStalledAppServer(t *testing.T) {
 	time.Sleep(700 * time.Millisecond)
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("stalled app-server descendant survived driver cleanup, marker stat error = %v", err)
+	}
+}
+
+func TestOuterTimeoutKillsSupervisedOriginalCodexProcessTree(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("original Codex harness requires macOS sandbox-exec")
+	}
+	root := t.TempDir()
+	started := filepath.Join(root, "app-server-started")
+	marker := filepath.Join(root, "late-descendant-marker")
+	fakeBinary := filepath.Join(root, "fake-codex")
+	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.0.1'; exit 0; fi\ntouch '" + started + "'\n(sleep 2.5; touch '" + marker + "') &\nsleep 30\n"
+	if err := os.WriteFile(fakeBinary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := filepath.Join(root, "catalog.json")
+	if err := os.WriteFile(catalog, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(root, "sandbox.sb")
+	if err := os.WriteFile(profile, []byte("(version 1)\n(deny network*)\n(allow default)\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate integration test source")
+	}
+	driver := filepath.Join(filepath.Dir(source), "original_codex_image.py")
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	result := make(chan error, 1)
+	go func() {
+		_, runErr := runLiveClient(t, 2*time.Second, python, []string{driver, "--base-url", "http://127.0.0.1:12345/v1", "--output-root", root, "--image-url", "https://images.invalid/test.png", "--rpc-timeout", "30", "--supervised"}, func(command *exec.Cmd) {
+			command.Env = append(os.Environ(), "CPA_LIVE_CODEX_BINARY="+fakeBinary, "CPA_LIVE_CODEX_EXPECTED_VERSION=0.0.1", "CPA_LIVE_CODEX_CATALOG="+catalog, "CPA_LIVE_CODEX_SANDBOX="+profile, "TASK_PROXY_API_KEY=fake-test-key")
+			command.Stdout, command.Stderr = &stdout, &stderr
+		})
+		result <- runErr
+	}()
+	deadline := time.After(5 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		select {
+		case err := <-result:
+			t.Fatalf("outer timeout fired before app-server started: %v, stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+		case <-deadline:
+			t.Fatalf("app-server did not start, stdout=%q stderr=%q", stdout.String(), stderr.String())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := <-result; err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("runLiveClient error = %v, want outer deadline exceeded", err)
+	}
+	time.Sleep(3 * time.Second)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("app-server descendant survived outer timeout, marker stat error = %v", err)
 	}
 }
 
@@ -99,7 +159,7 @@ func TestOriginalCodexDriverTimesOutDespiteUnrelatedNotifications(t *testing.T) 
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	_, runErr := runLiveClient(t, 10*time.Second, python, []string{driver, "--base-url", "http://127.0.0.1:12345/v1", "--output-root", root, "--image-url", "https://images.invalid/test.png", "--rpc-timeout", "1", "--turn-timeout", "0.1"}, func(command *exec.Cmd) {
+	_, runErr := runLiveClient(t, 10*time.Second, python, []string{driver, "--base-url", "http://127.0.0.1:12345/v1", "--output-root", root, "--image-url", "https://images.invalid/test.png", "--rpc-timeout", "1", "--turn-timeout", "0.1", "--supervised"}, func(command *exec.Cmd) {
 		command.Env = append(os.Environ(), "CPA_LIVE_CODEX_BINARY="+fakeBinary, "CPA_LIVE_CODEX_EXPECTED_VERSION=0.0.1", "CPA_LIVE_CODEX_CATALOG="+catalog, "CPA_LIVE_CODEX_SANDBOX="+profile, "TASK_PROXY_API_KEY=fake-test-key")
 		command.Stdout, command.Stderr = &stdout, &stderr
 	})

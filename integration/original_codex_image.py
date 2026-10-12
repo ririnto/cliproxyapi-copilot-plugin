@@ -99,7 +99,7 @@ stream_max_retries = 0
         frames.close()
         raise
     try:
-        child = await asyncio.create_subprocess_exec('/usr/bin/sandbox-exec', '-f', os.environ['CPA_LIVE_CODEX_SANDBOX'], binary, 'app-server', '--strict-config', '--stdio', cwd=root, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=4<<20)
+        child = await asyncio.create_subprocess_exec('/usr/bin/sandbox-exec', '-f', os.environ['CPA_LIVE_CODEX_SANDBOX'], binary, 'app-server', '--strict-config', '--stdio', cwd=root, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=not args.supervised, limit=4<<20)
     except BaseException:
         frames.close()
         stderr.close()
@@ -181,14 +181,21 @@ stream_max_retries = 0
         finally:
             try:
                 try:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    if args.supervised:
+                        if child.returncode is None:
+                            child.kill()
+                    else:
+                        os.killpg(child.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 try:
                     await asyncio.wait_for(child.wait(), timeout=5)
                 except asyncio.TimeoutError:
                     try:
-                        os.killpg(child.pid, signal.SIGKILL)
+                        if args.supervised:
+                            child.kill()
+                        else:
+                            os.killpg(child.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
                     await child.wait()
@@ -208,5 +215,6 @@ if __name__ == '__main__':
     parser.add_argument('--image-url', required=True)
     parser.add_argument('--rpc-timeout', type=float, default=30)
     parser.add_argument('--turn-timeout', type=float, default=180)
+    parser.add_argument('--supervised', action='store_true', help='inherit the caller process group for tree-wide timeout cleanup')
     args = parser.parse_args()
     raise SystemExit(asyncio.run(run(args)))

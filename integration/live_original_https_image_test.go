@@ -92,7 +92,7 @@ func TestLiveOriginalCodexHTTPSImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary["stage"] = "original-app-server"
-	_, runErr := runLiveClient(t, liveClientTimeout, python, []string{driver, "--base-url", relayURL, "--output-root", root, "--image-url", imageURL}, func(command *exec.Cmd) {
+	_, runErr := runLiveClient(t, liveClientTimeout, python, []string{driver, "--base-url", relayURL, "--output-root", root, "--image-url", imageURL, "--supervised"}, func(command *exec.Cmd) {
 		command.Env = append(os.Environ(), "TASK_PROXY_API_KEY="+liveCopilotClientKey)
 		command.Stdout, command.Stderr = stdout, stderr
 	})
