@@ -53,10 +53,12 @@ func (s *Service) copilotToken(ctx context.Context, callbackID, authID string, s
 	cfg, generation := s.configSnapshot()
 	now := s.now()
 	s.tokenMu.Lock()
+	if cached, ok := s.tokenEntries[key]; ok && cached.Fingerprint == fingerprint && effectiveAuthMode(cached.Mode) == authModeDirectOAuth && cfg.AuthMode == authModeDirectOAuth {
+		cached.ExpiresAt = storageCredentialExpiry(storage)
+		s.tokenEntries[key] = cached
+	}
+	pruneTokenCache(s.tokenEntries, cfg, now)
 	if cached, ok := s.tokenEntries[key]; ok && cached.Fingerprint == fingerprint && cached.ConfigGeneration == generation && effectiveAuthMode(cached.Mode) == cfg.AuthMode {
-		if cfg.AuthMode == authModeDirectOAuth {
-			cached.ExpiresAt = storageCredentialExpiry(storage)
-		}
 		if copilotTokenEntryValid(cached, cfg, now) {
 			s.tokenEntries[key] = cached
 			s.tokenMu.Unlock()
@@ -123,6 +125,7 @@ func (s *Service) copilotToken(ctx context.Context, callbackID, authID string, s
 	flight.err = errExchange
 	if errExchange == nil && entry.Fingerprint == fingerprint {
 		s.tokenEntries[key] = entry
+		pruneTokenCache(s.tokenEntries, cfg, s.now())
 	}
 	delete(s.tokenInflight, flightKey)
 	close(flight.done)
@@ -296,12 +299,12 @@ func (s *Service) invalidateAuthForCredential(authID, fingerprint string) {
 	}
 	s.tokenMu.Lock()
 	if entry, ok := s.tokenEntries[key]; ok && entry.Fingerprint == fingerprint {
-		delete(s.tokenEntries, key)
+		clearTokenCacheEntry(s.tokenEntries, key)
 	}
 	s.tokenMu.Unlock()
 	s.modelMu.Lock()
 	if entry, ok := s.modelEntries[key]; ok && entry.Fingerprint == fingerprint {
-		delete(s.modelEntries, key)
+		clearModelCacheEntry(s.modelEntries, key)
 	}
 	s.modelMu.Unlock()
 }
@@ -310,12 +313,12 @@ func (s *Service) invalidateAuth(authID string) {
 	authID = strings.TrimSpace(authID)
 	s.tokenMu.Lock()
 	if authID != "" {
-		delete(s.tokenEntries, authID)
+		clearTokenCacheEntry(s.tokenEntries, authID)
 	}
 	s.tokenMu.Unlock()
 	s.modelMu.Lock()
 	if authID != "" {
-		delete(s.modelEntries, authID)
+		clearModelCacheEntry(s.modelEntries, authID)
 	}
 	s.modelMu.Unlock()
 }

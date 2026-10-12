@@ -151,6 +151,7 @@ func (s *Service) models(ctx context.Context, callbackID, authID string, storage
 	now := s.now()
 	if !force {
 		s.modelMu.Lock()
+		pruneModelCache(s.modelEntries, now)
 		cached, ok := s.modelEntries[key]
 		s.modelMu.Unlock()
 		if ok && cached.Fingerprint == fingerprint && cached.APIBaseURL == token.APIBaseURL && effectiveAuthMode(cached.Mode) == effectiveAuthMode(token.Mode) && cached.ConfigGeneration == token.ConfigGeneration && cached.ExpiresAt.After(now) {
@@ -202,14 +203,17 @@ func (s *Service) models(ctx context.Context, callbackID, authID string, storage
 		return nil, copilotTokenEntry{}, fmt.Errorf("Copilot configuration changed during model discovery")
 	}
 	s.modelMu.Lock()
+	cacheNow := s.now()
+	pruneModelCache(s.modelEntries, cacheNow)
 	s.modelEntries[key] = modelCacheEntry{
 		Fingerprint:      fingerprint,
 		APIBaseURL:       token.APIBaseURL,
 		Mode:             effectiveAuthMode(token.Mode),
 		ConfigGeneration: token.ConfigGeneration,
-		ExpiresAt:        now.Add(cfg.modelCacheTTL()),
+		ExpiresAt:        cacheNow.Add(cfg.modelCacheTTL()),
 		Models:           cloneUpstreamModels(inventory),
 	}
+	pruneModelCache(s.modelEntries, cacheNow)
 	s.modelMu.Unlock()
 	s.configMu.RUnlock()
 	return inventory, token, nil
