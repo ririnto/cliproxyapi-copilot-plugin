@@ -19,6 +19,16 @@ The earlier startup race and NOTRUN snapshot below are historical.
 | GPT search SSE after repair | Identities pass; exact result/citation URL pairing fails because the annotation adds a tracking query absent from result URLs. |
 | GPT captured-terminal continuation | PASS: one real Responses request replays the original complete terminal output and ciphertext unchanged and answers without another search. |
 
+## Current conversion support and guards
+
+The completion audit and [denied live-access record](live-acceptance-status.md) separate current source validation from fresh provider acceptance, which is NOT RUN after the sealed request was not granted.
+
+[PR #36](https://github.com/ririnto/cpa-copilot-bridge/pull/36) completes the representable Claude-origin hosted-search round trip into Responses, retaining completed result ownership and history. This is conversion support; it does not change the recorded live Haiku WebSearch refusal or establish that the provider executes that tool.
+
+[PR #41](https://github.com/ririnto/cpa-copilot-bridge/pull/41) preserves strict Chat request semantics and refuses hosted state before dispatch when the destination cannot retain it. Complete hosted search from Chat to Responses remains explicitly unsupported until a lossless destination carrier exists. Claude Bash to Responses is also explicitly unsupported because no lossless equivalent execution/history contract is established.
+
+[PR #44](https://github.com/ririnto/cpa-copilot-bridge/pull/44) preserves standard Responses URL citations in Chat JSON, including exact text, URL/title and composed character positions. A standard streaming annotation carrier is not established. These bridge implementation states do not upgrade any provider-side acceptance result.
+
 The successful GPT continuation uses the original stream's identical public/client completed terminal.
 That terminal contains meaningful search results and an exactly matching source citation.
 Offline conversion repairs the earlier identities before validating the retained history.
@@ -81,7 +91,7 @@ Unchanged rejected profiles are retained without another speculative provider re
 
 | Remaining acceptance | Owner and next required input |
 | --- | --- |
-| Cross-format hosted search and Bash SSE/history | Main needs a lossless destination representation and a ready original-client request preserving actual result ownership. |
+| Cross-format Chat hosted search and Claude Bash-to-Responses | Chat hosted state is refused before dispatch; support requires a lossless destination carrier and genuine result ownership/history. Bash-to-Responses remains unsupported without a lossless execution/history contract. |
 | Gemini search, Claude WebSearch/Web Fetch, GPT interpreter | Copilot capability owner must provide changed capability/profile evidence for the exact model and rejected declaration. |
 | Image generation, file search, hosted MCP and tool search | Main needs advertised exact-model capability and genuine files, servers or tool registry resources. |
 | Original HTTPS image references and remote uploads | Codex rejects remote URLs before inference; genuine Claude URL-only stdin reaches Haiku Messages but Copilot rejects external URLs. Main needs a changed supported exact-model native profile preserving the required carrier fields. Uploads need authentic provider-owned issuance and lookup. |
@@ -257,7 +267,7 @@ Ordinary client functions with server-tool names retain their client execution s
 
 Incoming Claude `server_tool_use` history cannot use the ordinary function-call adapter.
 [PR #15](https://github.com/ririnto/cpa-copilot-bridge/pull/15) adds completed Claude-compatible hosted-search history from Responses to destination-native Messages, preserving tool ownership and complete history for supported shapes.
-Native Claude `server_tool_use` input targeting Responses or Chat remains rejected; the replay support does not reverse that conversion direction.
+Completed Claude WebSearch call/result/history input targeting Responses is supported by PR #36 with authentic ownership and opaque replay values. Complete hosted state targeting Chat and Claude Bash targeting Responses remain explicitly rejected.
 The request adapter also rejects unsupported Bash history, incomplete search pairing and opaque replay state that cannot be represented without invention.
 CPA's built-in response conversion preserves actual paired search results and replay tokens when present.
 Offline/native regression checks establish the supported completed-search conversion and zero-dispatch rejection; they do not establish a fresh original-client provider conversion pass or general cross-format hosted-tool parity.
