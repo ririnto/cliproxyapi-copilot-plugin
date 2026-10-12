@@ -15,6 +15,13 @@ func claudeRequestToResponses(model string, body []byte, stream bool) ([]byte, e
 	if err != nil {
 		return nil, fmt.Errorf("decode Claude request: %w", err)
 	}
+	stopSequences, err := claudeStopSequences(root)
+	if err != nil {
+		return nil, err
+	}
+	if len(stopSequences) > 0 {
+		return nil, fmt.Errorf("Claude stop_sequences cannot be represented by the Copilot Responses endpoint")
+	}
 	messages, hasMessages := root["messages"].([]any)
 	if rawMessages, exists := root["messages"]; exists && rawMessages != nil && !hasMessages {
 		return nil, fmt.Errorf("Claude messages must be an array")
@@ -287,6 +294,29 @@ func claudeRequestToResponses(model string, body []byte, stream bool) ([]byte, e
 	}
 	out["input"] = input
 	return json.Marshal(out)
+}
+
+func claudeStopSequences(root map[string]any) ([]string, error) {
+	value, exists := root["stop_sequences"]
+	if !exists {
+		return nil, nil
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("Claude stop_sequences must be an array of strings")
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	sequences := make([]string, len(values))
+	for index, value := range values {
+		sequence, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("Claude stop_sequences[%d] must be a string", index)
+		}
+		sequences[index] = sequence
+	}
+	return sequences, nil
 }
 
 func claudeToolParameters(tool map[string]any) (map[string]any, error) {
