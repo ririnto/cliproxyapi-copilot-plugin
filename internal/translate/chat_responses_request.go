@@ -2,8 +2,10 @@ package translate
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
@@ -15,6 +17,10 @@ func chatRequestToResponses(model string, body []byte, stream bool) ([]byte, err
 	if err := validateChatRequestForResponses(body); err != nil {
 		return nil, err
 	}
+	searchTool, hasSearch, err := chatHostedSearchDeclaration(body)
+	if err != nil {
+		return nil, err
+	}
 	prepared, err := chatRequestWithOpaqueAssistantMarkers(body)
 	if err != nil {
 		return nil, err
@@ -23,13 +29,38 @@ func chatRequestToResponses(model string, body []byte, stream bool) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	claude := registry.TranslateRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, prepared, stream)
+	if gjson.GetBytes(prepared, "response_format").Exists() {
+		prepared, err = sjson.DeleteBytes(prepared, "response_format")
+		if err != nil {
+			return nil, fmt.Errorf("remove Chat response_format before Claude request translation")
+		}
+	}
+	claudeEnvelope := registry.TranslateRequestEnvelope(context.Background(), sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.RequestEnvelope{
+		Format: sdktranslator.FormatOpenAI,
+		Model:  model,
+		Stream: stream,
+		Body:   prepared,
+	})
+	if claudeEnvelope.Err != nil {
+		return nil, fmt.Errorf("official Chat-to-Claude request translation refused the request: %w", claudeEnvelope.Err)
+	}
+	claude := claudeEnvelope.Body
 	if len(claude) == 0 || !json.Valid(claude) {
 		return nil, fmt.Errorf("official Chat-to-Claude request translation failed")
 	}
 	responses, err := claudeRequestToResponses(model, claude, stream)
 	if err != nil {
 		return nil, err
+	}
+	responses, err = restoreChatResponsesConstraints(responses, body, model, stream)
+	if err != nil {
+		return nil, err
+	}
+	if hasSearch {
+		responses, err = appendChatHostedSearchTool(responses, searchTool)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if key := gjson.GetBytes(body, "prompt_cache_key"); key.Exists() {
 		responses, err = sjson.SetRawBytes(responses, "prompt_cache_key", []byte(key.Raw))
@@ -58,6 +89,14 @@ func chatRequestToClaude(model string, body []byte, stream bool) ([]byte, error)
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("request body is not valid JSON")
 	}
+	if err := validateChatToolHistory(body); err != nil {
+		return nil, err
+	}
+	if _, hasSearch, err := chatHostedSearchDeclaration(body); err != nil {
+		return nil, err
+	} else if hasSearch {
+		return nil, fmt.Errorf("Chat hosted web search cannot be represented by Messages")
+	}
 	prepared, err := chatRequestWithOpaqueAssistantMarkers(body)
 	if err != nil {
 		return nil, err
@@ -66,9 +105,22 @@ func chatRequestToClaude(model string, body []byte, stream bool) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	translated := registry.TranslateRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, prepared, stream)
+	envelope := registry.TranslateRequestEnvelope(context.Background(), sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.RequestEnvelope{
+		Format: sdktranslator.FormatOpenAI,
+		Model:  model,
+		Stream: stream,
+		Body:   prepared,
+	})
+	if envelope.Err != nil {
+		return nil, fmt.Errorf("official Chat-to-Claude request translation refused the request: %w", envelope.Err)
+	}
+	translated := envelope.Body
 	if len(translated) == 0 || !json.Valid(translated) {
 		return nil, fmt.Errorf("official Chat-to-Claude request translation failed")
+	}
+	translated, err = restoreChatTemperatureToMessages(translated, body)
+	if err != nil {
+		return nil, err
 	}
 	translated, err = restoreClaudeMessagesToolIDs(translated)
 	if err != nil {
@@ -620,6 +672,15 @@ func validateChatRequestForResponses(body []byte) error {
 	if err != nil {
 		return fmt.Errorf("decode Chat request for Responses translation")
 	}
+	if err := validateChatToolHistory(body); err != nil {
+		return err
+	}
+	if err := validateChatResponseFormat(root); err != nil {
+		return err
+	}
+	if _, err := validateChatTemperature(body, 2); err != nil {
+		return err
+	}
 	messages, exists := root["messages"]
 	if exists && hasMeaningfulValue(messages) {
 		array, ok := messages.([]any)
@@ -643,6 +704,357 @@ func validateChatRequestForResponses(body []byte) error {
 		}
 	}
 	return nil
+}
+
+func validateChatToolHistory(body []byte) error {
+	root, err := decodeObject(body)
+	if err != nil {
+		return fmt.Errorf("decode Chat request tool history")
+	}
+	callPositions := make(map[string]int)
+	messages, messagesExist := root["messages"]
+	if messagesExist && hasMeaningfulValue(messages) {
+		array, ok := messages.([]any)
+		if !ok {
+			return fmt.Errorf("Chat messages have an unsupported shape for tool history")
+		}
+		for messageIndex, rawMessage := range array {
+			message, ok := rawMessage.(map[string]any)
+			if !ok {
+				continue
+			}
+			if stringValue(message["role"]) != "assistant" {
+				continue
+			}
+			callsValue, exists := message["tool_calls"]
+			if !exists || callsValue == nil {
+				continue
+			}
+			calls, ok := callsValue.([]any)
+			if !ok {
+				return fmt.Errorf("Chat assistant tool calls have an unsupported shape")
+			}
+			for _, rawCall := range calls {
+				call, ok := rawCall.(map[string]any)
+				if !ok || stringValue(call["type"]) != "function" {
+					return fmt.Errorf("Chat tool call cannot be represented by function translation")
+				}
+				callID, ok := call["id"].(string)
+				if !ok || strings.TrimSpace(callID) == "" {
+					return fmt.Errorf("Chat function call has no call ID")
+				}
+				function, ok := call["function"].(map[string]any)
+				if !ok {
+					return fmt.Errorf("Chat function call has no function object")
+				}
+				name, ok := function["name"].(string)
+				if !ok || strings.TrimSpace(name) == "" {
+					return fmt.Errorf("Chat function call has no function name")
+				}
+				arguments, ok := function["arguments"].(string)
+				if !ok || strings.TrimSpace(arguments) == "" || !json.Valid([]byte(arguments)) {
+					return fmt.Errorf("Chat function call arguments must be an explicit JSON object")
+				}
+				argumentObject, err := decodeObject([]byte(arguments))
+				if err != nil || argumentObject == nil {
+					return fmt.Errorf("Chat function call arguments must be an explicit JSON object")
+				}
+				if _, exists := callPositions[callID]; exists {
+					return fmt.Errorf("Chat function call IDs are ambiguous")
+				}
+				callPositions[callID] = messageIndex
+			}
+		}
+	}
+
+	toolsValue, toolsExist := root["tools"]
+	if toolsExist && toolsValue != nil {
+		tools, ok := toolsValue.([]any)
+		if !ok {
+			return fmt.Errorf("Chat tools have an unsupported shape")
+		}
+		for _, rawTool := range tools {
+			tool, ok := rawTool.(map[string]any)
+			if !ok || stringValue(tool["type"]) != "function" {
+				return fmt.Errorf("Chat tool cannot be represented by function translation")
+			}
+			function, ok := tool["function"].(map[string]any)
+			name, nameOK := function["name"].(string)
+			if !ok || !nameOK || strings.TrimSpace(name) == "" {
+				return fmt.Errorf("Chat function tool has no function name")
+			}
+			if description, exists := function["description"]; exists {
+				if _, ok := description.(string); !ok {
+					return fmt.Errorf("Chat function description must be a string")
+				}
+			}
+			if parameters, exists := function["parameters"]; exists {
+				if _, ok := parameters.(map[string]any); !ok {
+					return fmt.Errorf("Chat function parameters must be an object")
+				}
+			}
+			if strict, exists := function["strict"]; exists {
+				if _, ok := strict.(bool); !ok {
+					return fmt.Errorf("Chat function strict must be a boolean")
+				}
+			}
+		}
+	}
+
+	if messagesExist {
+		array, _ := messages.([]any)
+		resultIDs := make(map[string]struct{})
+		for messageIndex, rawMessage := range array {
+			message, ok := rawMessage.(map[string]any)
+			if !ok || stringValue(message["role"]) != "tool" {
+				continue
+			}
+			callID, ok := message["tool_call_id"].(string)
+			if !ok || strings.TrimSpace(callID) == "" {
+				return fmt.Errorf("Chat tool result has no call ID")
+			}
+			callIndex, exists := callPositions[callID]
+			if !exists || callIndex >= messageIndex {
+				return fmt.Errorf("Chat tool result has no preceding function call")
+			}
+			if _, exists := resultIDs[callID]; exists {
+				return fmt.Errorf("Chat function call has multiple tool results")
+			}
+			resultIDs[callID] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validateChatResponseFormat(root map[string]any) error {
+	value, exists := root["response_format"]
+	if !exists {
+		return nil
+	}
+	format, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("Chat response_format must be an object")
+	}
+	typ, ok := format["type"].(string)
+	if !ok {
+		return fmt.Errorf("Chat response_format has no string type")
+	}
+	switch typ {
+	case "text", "json_object":
+		if len(format) != 1 {
+			return fmt.Errorf("Chat response_format contains unsupported options")
+		}
+	case "json_schema":
+		if len(format) != 2 {
+			return fmt.Errorf("Chat JSON schema response_format contains unsupported options")
+		}
+		schemaConfig, ok := format["json_schema"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("Chat JSON schema response_format has an unsupported shape")
+		}
+		for key := range schemaConfig {
+			if key != "name" && key != "description" && key != "schema" && key != "strict" {
+				return fmt.Errorf("Chat JSON schema response_format has unsupported option %q", key)
+			}
+		}
+		name, ok := schemaConfig["name"].(string)
+		if !ok || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("Chat JSON schema response_format has no schema name")
+		}
+		if _, ok := schemaConfig["schema"].(map[string]any); !ok {
+			return fmt.Errorf("Chat JSON schema response_format has no schema object")
+		}
+		if description, exists := schemaConfig["description"]; exists {
+			if _, ok := description.(string); !ok {
+				return fmt.Errorf("Chat JSON schema description must be a string")
+			}
+		}
+		if strict, exists := schemaConfig["strict"]; exists {
+			if _, ok := strict.(bool); !ok {
+				return fmt.Errorf("Chat JSON schema strict must be a boolean")
+			}
+		}
+	default:
+		return fmt.Errorf("Chat response_format type %q cannot be represented by Responses", typ)
+	}
+	return nil
+}
+
+func restoreChatResponsesConstraints(responses, chat []byte, model string, stream bool) ([]byte, error) {
+	root, err := decodeObject(chat)
+	if err != nil {
+		return nil, fmt.Errorf("decode Chat constraints for Responses translation")
+	}
+	toolsValue, hasTools := root["tools"]
+	toolList, _ := toolsValue.([]any)
+	_, hasResponseFormat := root["response_format"]
+	if !hasResponseFormat && (!hasTools || len(toolList) == 0) {
+		return responses, nil
+	}
+	projection := []byte(`{}`)
+	if hasTools {
+		projection, err = sjson.SetRawBytes(projection, "tools", []byte(gjson.GetBytes(chat, "tools").Raw))
+		if err != nil {
+			return nil, fmt.Errorf("project Chat function constraints for Responses translation")
+		}
+	}
+	if hasResponseFormat {
+		projection, err = sjson.SetRawBytes(projection, "response_format", []byte(gjson.GetBytes(chat, "response_format").Raw))
+		if err != nil {
+			return nil, fmt.Errorf("project Chat response_format for Responses translation")
+		}
+	}
+	envelope := registry.TranslateRequestEnvelope(context.Background(), sdktranslator.FormatOpenAI, sdktranslator.FormatCodex, sdktranslator.RequestEnvelope{
+		Format: sdktranslator.FormatOpenAI,
+		Model:  model,
+		Stream: stream,
+		Body:   projection,
+	})
+	if envelope.Err != nil {
+		return nil, fmt.Errorf("official Chat-to-Codex constraint projection refused the request: %w", envelope.Err)
+	}
+	if len(envelope.Body) == 0 || !json.Valid(envelope.Body) {
+		return nil, fmt.Errorf("official Chat-to-Codex constraint projection failed")
+	}
+	updated := responses
+	if hasResponseFormat {
+		format := objectValue(root["response_format"])
+		if stringValue(format["type"]) == "json_object" {
+			updated, err = sjson.SetRawBytes(updated, "text.format", []byte(`{"type":"json_object"}`))
+		} else {
+			textFormat := gjson.GetBytes(envelope.Body, "text.format")
+			if !textFormat.Exists() || !textFormat.IsObject() {
+				return nil, fmt.Errorf("Chat response_format was not preserved by Responses constraint mapping")
+			}
+			updated, err = sjson.SetRawBytes(updated, "text.format", []byte(textFormat.Raw))
+			if err == nil && stringValue(format["type"]) == "json_schema" {
+				schemaConfig := objectValue(format["json_schema"])
+				if description, exists := schemaConfig["description"]; exists {
+					updated, err = sjson.SetBytes(updated, "text.format.description", description)
+				}
+				if err == nil {
+					if _, exists := schemaConfig["strict"]; !exists {
+						updated, err = sjson.SetBytes(updated, "text.format.strict", false)
+					}
+				}
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("preserve Chat response_format in Responses request")
+		}
+	}
+	if len(toolList) > 0 {
+		mappedTools := gjson.GetBytes(envelope.Body, "tools").Array()
+		responsesTools := gjson.GetBytes(updated, "tools").Array()
+		if len(mappedTools) != len(toolList) || len(responsesTools) < len(toolList) {
+			return nil, fmt.Errorf("Chat function constraints were not preserved by Responses translation")
+		}
+		for index, mappedTool := range mappedTools {
+			strict := mappedTool.Get("strict")
+			if !strict.Exists() || strict.Type != gjson.True && strict.Type != gjson.False {
+				return nil, fmt.Errorf("Chat function strictness was not preserved by Responses constraint mapping")
+			}
+			updated, err = sjson.SetRawBytes(updated, fmt.Sprintf("tools.%d.strict", index), []byte(strict.Raw))
+			if err != nil {
+				return nil, fmt.Errorf("preserve Chat function strictness in Responses request")
+			}
+		}
+	}
+	return updated, nil
+}
+
+func chatHostedSearchDeclaration(body []byte) ([]byte, bool, error) {
+	root, err := decodeObject(body)
+	if err != nil {
+		return nil, false, fmt.Errorf("decode Chat hosted-search declaration")
+	}
+	optionsValue, exists := root["web_search_options"]
+	if !exists {
+		return nil, false, nil
+	}
+	options, ok := optionsValue.(map[string]any)
+	if !ok {
+		return nil, false, fmt.Errorf("Chat web_search_options must be an object")
+	}
+	for key := range options {
+		if key != "search_context_size" && key != "user_location" {
+			return nil, false, fmt.Errorf("Chat web_search_options contains unsupported option %q", key)
+		}
+	}
+	declaration := []byte(`{"type":"web_search"}`)
+	if contextSize, exists := options["search_context_size"]; exists {
+		value, ok := contextSize.(string)
+		if !ok || value != "low" && value != "medium" && value != "high" {
+			return nil, false, fmt.Errorf("Chat web_search_options.search_context_size is invalid")
+		}
+		declaration, err = sjson.SetBytes(declaration, "search_context_size", value)
+		if err != nil {
+			return nil, false, fmt.Errorf("preserve Chat hosted-search context size")
+		}
+	}
+	if locationValue, exists := options["user_location"]; exists {
+		location, ok := locationValue.(map[string]any)
+		if !ok || stringValue(location["type"]) != "approximate" {
+			return nil, false, fmt.Errorf("Chat web_search_options.user_location cannot be represented by Responses")
+		}
+		for key, value := range location {
+			if key != "type" && key != "country" && key != "region" && key != "city" && key != "timezone" {
+				return nil, false, fmt.Errorf("Chat web_search_options.user_location contains unsupported option %q", key)
+			}
+			if _, ok := value.(string); !ok {
+				return nil, false, fmt.Errorf("Chat web_search_options.user_location.%s must be a string", key)
+			}
+		}
+		locationRaw := gjson.GetBytes(body, "web_search_options.user_location")
+		declaration, err = sjson.SetRawBytes(declaration, "user_location", []byte(locationRaw.Raw))
+		if err != nil {
+			return nil, false, fmt.Errorf("preserve Chat hosted-search location")
+		}
+	}
+	return declaration, true, nil
+}
+
+func appendChatHostedSearchTool(responses, declaration []byte) ([]byte, error) {
+	var tools [][]byte
+	for _, tool := range gjson.GetBytes(responses, "tools").Array() {
+		tools = append(tools, []byte(tool.Raw))
+	}
+	tools = append(tools, declaration)
+	updated, err := sjson.SetRawBytes(responses, "tools", rawJSONArray(tools))
+	if err != nil {
+		return nil, fmt.Errorf("preserve Chat hosted search in Responses request")
+	}
+	return updated, nil
+}
+
+func restoreChatTemperatureToMessages(messages, chat []byte) ([]byte, error) {
+	temperature, err := validateChatTemperature(chat, 1)
+	if err != nil {
+		return nil, err
+	}
+	if !temperature.Exists() {
+		return messages, nil
+	}
+	updated, err := sjson.SetRawBytes(messages, "temperature", []byte(temperature.Raw))
+	if err != nil {
+		return nil, fmt.Errorf("preserve Chat temperature for Messages")
+	}
+	return updated, nil
+}
+
+func validateChatTemperature(chat []byte, maximum float64) (gjson.Result, error) {
+	temperature := gjson.GetBytes(chat, "temperature")
+	if !temperature.Exists() {
+		return temperature, nil
+	}
+	if temperature.Type != gjson.Number {
+		return gjson.Result{}, fmt.Errorf("Chat temperature must be a number")
+	}
+	value := temperature.Float()
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > maximum {
+		return gjson.Result{}, fmt.Errorf("Chat temperature must be between 0 and %g", maximum)
+	}
+	return temperature, nil
 }
 
 func validateChatMessageForResponses(message map[string]any) error {
