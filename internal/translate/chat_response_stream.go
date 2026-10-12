@@ -42,14 +42,17 @@ type claudeOpaqueStreamBlock struct {
 }
 
 func responsesStreamToChat(ctx context.Context, model string, original, translated, frame []byte, state *any) ([][]byte, error) {
+	if err := validateResponsesStreamFrame(frame, sdktranslator.FormatOpenAI); err != nil {
+		return nil, err
+	}
 	if state == nil {
 		return nil, fmt.Errorf("Responses-to-Chat stream translation requires state")
 	}
 	streamState, ok := (*state).(*responsesChatStreamState)
 	if !ok {
-		claudeRequest := registry.TranslateRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, original, true)
-		if len(claudeRequest) == 0 || !json.Valid(claudeRequest) {
-			return nil, fmt.Errorf("official Chat-to-Claude stream context translation failed")
+		claudeRequest, err := translateSDKRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, original, true)
+		if err != nil {
+			return nil, err
 		}
 		streamState = &responsesChatStreamState{Request: claudeRequest, Model: model, Output: chatOpaqueStreamState{Model: model, LastSequence: -1}}
 		*state = streamState
@@ -158,7 +161,7 @@ func responsesOpaqueItemKey(item []byte) string {
 }
 
 func claudeStreamToChat(ctx context.Context, model string, original, translated, frame []byte, state *any) ([][]byte, error) {
-	if err := validateClaudeStreamFrame(frame); err != nil {
+	if err := validateClaudeStreamFrame(frame, sdktranslator.FormatOpenAI); err != nil {
 		return nil, err
 	}
 	if state == nil {
@@ -234,6 +237,15 @@ func streamClaudeFrameToChat(ctx context.Context, model string, original, claude
 	event, data, done, err := parseSSEFrame(frame)
 	if err != nil {
 		return nil, err
+	}
+	if !done && len(data) > 0 {
+		payload, err := decodeObject(data)
+		if err != nil {
+			return nil, fmt.Errorf("decode Claude stream event for Chat translation")
+		}
+		if err := validateClaudeHostedStateForChat(payload); err != nil {
+			return nil, err
+		}
 	}
 	normalized, err := nativeClaudeFrame(data, done)
 	if err != nil {
