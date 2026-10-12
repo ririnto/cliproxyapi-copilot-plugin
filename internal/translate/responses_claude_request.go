@@ -139,9 +139,18 @@ func responsesRequestToClaude(model string, body []byte, stream bool) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	out := registry.TranslateRequest(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatClaude, model, temporary, stream)
-	if len(out) == 0 || !json.Valid(out) {
-		return nil, fmt.Errorf("official Responses-to-Claude request translation failed")
+	out, err := translateSDKRequest(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatClaude, model, temporary, stream)
+	if err != nil {
+		return nil, err
+	}
+	if temperature := gjson.GetBytes(body, "temperature"); temperature.Exists() {
+		if temperature.Type != gjson.Number || temperature.Float() < 0 || temperature.Float() > 1 {
+			return nil, fmt.Errorf("Responses temperature cannot be represented by Claude Messages")
+		}
+		out, err = sjson.SetRawBytes(out, "temperature", []byte(temperature.Raw))
+		if err != nil {
+			return nil, fmt.Errorf("preserve Responses temperature for Claude Messages: %w", err)
+		}
 	}
 	toolChoice := gjson.GetBytes(body, "tool_choice")
 	if toolChoice.Type == gjson.String && toolChoice.String() == "required" {

@@ -11,9 +11,16 @@ import (
 )
 
 func responsesResponseToChat(ctx context.Context, model string, original, translated, body []byte) ([]byte, error) {
-	claudeRequest := registry.TranslateRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, original, false)
-	if len(claudeRequest) == 0 || !json.Valid(claudeRequest) {
-		return nil, fmt.Errorf("official Chat-to-Claude response context translation failed")
+	root, err := decodeObject(body)
+	if err != nil {
+		return nil, fmt.Errorf("decode Responses response for Chat translation")
+	}
+	if err := validateResponsesOutputForChat(root); err != nil {
+		return nil, err
+	}
+	claudeRequest, err := translateSDKRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, original, false)
+	if err != nil {
+		return nil, err
 	}
 	claudeResponse, err := responsesResponseToClaude(model, body)
 	if err != nil {
