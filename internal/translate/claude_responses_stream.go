@@ -14,6 +14,7 @@ type responsesClaudeStreamState struct {
 	Model             string
 	NextBlock         int
 	BufferAfterTool   bool
+	BufferAfterSearch bool
 	ToolOutputIndexes map[int]struct{}
 	Blocks            map[string]*responsesClaudeBlock
 }
@@ -70,7 +71,7 @@ func responsesStreamToClaude(model string, frame []byte, state *any) ([][]byte, 
 	case "error", "response.failed":
 		return nil, fmt.Errorf("Copilot Responses stream failed")
 	}
-	if streamState.BufferAfterTool && event != "response.completed" && event != "response.incomplete" {
+	if (streamState.BufferAfterTool || streamState.BufferAfterSearch) && event != "response.completed" && event != "response.incomplete" {
 		if err := streamState.trackBufferedToolEvent(event, payload); err != nil {
 			return nil, err
 		}
@@ -89,6 +90,8 @@ func responsesStreamToClaude(model string, frame []byte, state *any) ([][]byte, 
 		item := objectValue(payload["item"])
 		key := itemKey(payload)
 		switch stringValue(item["type"]) {
+		case "web_search_call":
+			streamState.BufferAfterSearch = true
 		case "reasoning":
 			block := streamState.block(key, "thinking")
 			block.Encrypted = rawStringValue(item["encrypted_content"])
@@ -324,9 +327,22 @@ func (s *responsesClaudeStreamState) reconcileTerminalOutput(response map[string
 				if okPart && (stringValue(part["type"]) == "output_text" || stringValue(part["type"]) == "text" || stringValue(part["type"]) == "refusal") {
 					text := firstRawString(part, "text", "refusal")
 					contentKey := fmt.Sprintf("%s:content:%d", key, contentIndex)
-					out = append(out, s.reconcileText(contentKey, text)...)
+					out = append(out, s.reconcileTextPart(contentKey, text, arrayValue(part["annotations"]))...)
 				}
 			}
+		case "web_search_call":
+			toolID := strings.TrimPrefix(rawStringValue(item["id"]), "ws_")
+			query := rawStringValue(objectValue(item["action"])["query"])
+			use := map[string]any{"type": "server_tool_use", "id": toolID, "name": "web_search", "input": map[string]any{"query": query}}
+			result := map[string]any{"type": "web_search_tool_result", "tool_use_id": toolID, "content": item["results"]}
+			out = append(out, claudeSSE("content_block_start", map[string]any{"type": "content_block_start", "index": s.NextBlock, "content_block": use}))
+			useIndex := s.NextBlock
+			s.NextBlock++
+			out = append(out, claudeSSE("content_block_stop", map[string]any{"type": "content_block_stop", "index": useIndex}))
+			out = append(out, claudeSSE("content_block_start", map[string]any{"type": "content_block_start", "index": s.NextBlock, "content_block": result}))
+			resultIndex := s.NextBlock
+			s.NextBlock++
+			out = append(out, claudeSSE("content_block_stop", map[string]any{"type": "content_block_stop", "index": resultIndex}))
 		case "reasoning":
 			out = append(out, s.reconcileReasoning(key, item)...)
 		case "function_call", "custom_tool_call":
@@ -382,6 +398,10 @@ func (s *responsesClaudeStreamState) trackBufferedToolEvent(event string, payloa
 }
 
 func (s *responsesClaudeStreamState) reconcileText(key, text string) [][]byte {
+	return s.reconcileTextPart(key, text, nil)
+}
+
+func (s *responsesClaudeStreamState) reconcileTextPart(key, text string, citations []any) [][]byte {
 	block := s.Blocks[key]
 	remainder := text
 	if block != nil && block.SawDelta {
@@ -390,12 +410,19 @@ func (s *responsesClaudeStreamState) reconcileText(key, text string) [][]byte {
 		}
 		remainder = strings.TrimPrefix(text, block.TextAccumulated)
 	}
-	if remainder == "" {
+	if remainder == "" && len(citations) == 0 {
 		return nil
 	}
 	target, targetKey := terminalBlock(s, key, "text", block)
 	out := s.openText(target)
 	out = append(out, s.delta(target, "text_delta", "text", remainder)...)
+	for _, citation := range citations {
+		out = append(out, [][]byte{claudeSSE("content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": target.Index,
+			"delta": map[string]any{"type": "citations_delta", "citation": citation},
+		})}...)
+	}
 	out = append(out, s.closeBlock(targetKey)...)
 	return out
 }

@@ -316,7 +316,7 @@ func TestCapturedNativeServerToolCrossFormatRefusalsRemainExplicit(t *testing.T)
 	}
 
 	gptSearchResponse := readNativeServerToolFixture(t, "gpt-responses-search", "response.json")
-	if _, err := ResponsesToClaude(context.Background(), "claude-haiku-5.5", nil, nil, gptSearchResponse); err == nil || !strings.Contains(err.Error(), "web search output cannot be represented") {
+	if _, err := ResponsesToClaude(context.Background(), "claude-haiku-5.5", nil, nil, gptSearchResponse); err == nil || !strings.Contains(err.Error(), "Claude server tool item ID") {
 		t.Fatalf("Responses hosted search output was not refused explicitly: %v", err)
 	}
 	claudeExecutionResponse := readNativeServerToolFixture(t, "claude-messages-code-execution", "response.json")
