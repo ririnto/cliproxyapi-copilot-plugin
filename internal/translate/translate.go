@@ -346,6 +346,9 @@ func response(ctx context.Context, from, to sdktranslator.Format, model string, 
 }
 
 func chatResponseToResponses(ctx context.Context, model string, original, translated, body []byte) ([]byte, error) {
+	if err := chatResponseFailure(body); err != nil {
+		return nil, err
+	}
 	out := registry.TranslateNonStream(ctx, sdktranslator.FormatOpenAI, sdktranslator.FormatOpenAIResponse, model, original, translated, body, nil)
 	if len(out) == 0 || !json.Valid(out) {
 		return nil, fmt.Errorf("official Chat-to-Responses response translation failed")
@@ -355,6 +358,15 @@ func chatResponseToResponses(ctx context.Context, model string, original, transl
 		return insertOpaqueReasoning(out, carrier)
 	}
 	return out, err
+}
+
+func chatResponseFailure(body []byte) error {
+	for _, choice := range gjson.GetBytes(body, "choices").Array() {
+		if choice.Get("finish_reason").String() == "error" {
+			return fmt.Errorf("Copilot Chat request failed")
+		}
+	}
+	return nil
 }
 
 func stream(ctx context.Context, from, to sdktranslator.Format, model string, original, translated, frame []byte, state *any) ([][]byte, error) {
@@ -398,8 +410,19 @@ func stream(ctx context.Context, from, to sdktranslator.Format, model string, or
 			streamState = &chatOpaqueStreamState{Model: model, LastSequence: -1}
 			*state = streamState
 		}
+		if streamState.Failure != nil {
+			return nil, streamState.Failure
+		}
 		if streamState.Model != model {
 			return nil, fmt.Errorf("Chat opaque reasoning stream model changed")
+		}
+		_, data, _, err := parseSSEFrame(frame)
+		if err != nil {
+			return nil, err
+		}
+		if err := chatResponseFailure(data); err != nil {
+			streamState.Failure = err
+			return nil, err
 		}
 		if err := streamState.observe(frame, translated, model); err != nil {
 			return nil, err

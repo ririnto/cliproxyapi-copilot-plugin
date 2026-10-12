@@ -4,14 +4,75 @@ package integration
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestLiveClientProcessGroupSignalLifecycle(t *testing.T) {
+	t.Run("successful cancellation skips final cleanup signal", func(t *testing.T) {
+		var signals []int
+		group := &liveClientProcessGroup{pid: 42, kill: func(pid int, signal syscall.Signal) error {
+			if pid != -42 || signal != syscall.SIGKILL {
+				t.Fatalf("kill(%d, %v), want kill(-42, SIGKILL)", pid, signal)
+			}
+			signals = append(signals, pid)
+			return nil
+		}}
+
+		if err := group.cancel(); err != nil {
+			t.Fatalf("cancel process group: %v", err)
+		}
+		if err := group.cleanup(); err != nil {
+			t.Fatalf("cleanup process group: %v", err)
+		}
+		if len(signals) != 1 {
+			t.Fatalf("process group signals = %d, want one cancellation signal", len(signals))
+		}
+	})
+
+	t.Run("failed cancellation retains final cleanup", func(t *testing.T) {
+		var signals int
+		group := &liveClientProcessGroup{pid: 42, kill: func(int, syscall.Signal) error {
+			signals++
+			if signals == 1 {
+				return syscall.EPERM
+			}
+			return nil
+		}}
+
+		if err := group.cancel(); !errors.Is(err, syscall.EPERM) {
+			t.Fatalf("cancel process group error = %v, want EPERM", err)
+		}
+		if err := group.cleanup(); err != nil {
+			t.Fatalf("cleanup process group: %v", err)
+		}
+		if signals != 2 {
+			t.Fatalf("process group signals = %d, want cancellation attempt and final cleanup", signals)
+		}
+	})
+
+	t.Run("normal exit retains descendant cleanup", func(t *testing.T) {
+		signals := 0
+		group := &liveClientProcessGroup{pid: 42, kill: func(int, syscall.Signal) error {
+			signals++
+			return nil
+		}}
+
+		if err := group.cleanup(); err != nil {
+			t.Fatalf("cleanup process group: %v", err)
+		}
+		if signals != 1 {
+			t.Fatalf("process group signals = %d, want one final cleanup signal", signals)
+		}
+	})
+}
 
 func TestRunLiveClientKillsStalledProcessGroup(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "descendant-survived")
