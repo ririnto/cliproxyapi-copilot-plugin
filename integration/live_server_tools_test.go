@@ -564,6 +564,7 @@ func (g *liveServerToolGate) serveHTTP(writer http.ResponseWriter, request *http
 	writer.WriteHeader(response.StatusCode)
 	capture.LocalResponse = liveHTTPLog{Proto: request.Proto, Status: response.StatusCode, Headers: g.redactedHeaders(writer.Header()), ContentLength: -1, ContentEncoding: writer.Header().Get("Content-Encoding"), FramingCoverage: "outgoing_framing_unobserved"}
 	var retained bytes.Buffer
+	terminalTracker := liveResponseTerminalTracker{expectedModel: liveAttachmentExpectedModel(phaseCell)}
 	chunk := make([]byte, 32<<10)
 	streamEndedCleanly := false
 	forwardedBytes, flushedBytes := 0, 0
@@ -574,6 +575,7 @@ func (g *liveServerToolGate) serveHTTP(writer http.ResponseWriter, request *http
 			forwardN := min(n, remaining)
 			if forwardN > 0 {
 				retained.Write(chunk[:forwardN])
+				terminalTracker.Feed(chunk[:forwardN])
 			}
 			if n > remaining {
 				capture.CaptureTruncated = true
@@ -595,7 +597,7 @@ func (g *liveServerToolGate) serveHTTP(writer http.ResponseWriter, request *http
 					flusher.Flush()
 					flushedBytes = forwardedBytes
 				}
-				if liveCompleteResponseTerminal(retained.Bytes(), liveAttachmentExpectedModel(phaseCell)) {
+				if terminalTracker.Complete() {
 					capture.StreamTerminalComplete = true
 					if capture.StreamTerminalBytes == 0 {
 						capture.StreamTerminalBytes = retained.Len()
@@ -623,7 +625,7 @@ func (g *liveServerToolGate) serveHTTP(writer http.ResponseWriter, request *http
 			break
 		}
 	}
-	capture.StreamTerminalComplete = liveCompleteResponseTerminal(retained.Bytes(), liveAttachmentExpectedModel(phaseCell))
+	capture.StreamTerminalComplete = terminalTracker.Complete()
 	capture.StreamForwardedBytes = forwardedBytes
 	capture.StreamFlushedBytes = flushedBytes
 	capture.StreamTerminalForwarded = capture.StreamTerminalForwarded && capture.StreamTerminalComplete && forwardedBytes >= capture.StreamTerminalBytes && flushedBytes >= capture.StreamTerminalBytes && capture.ErrorClass != "test_hop_write_error" && !capture.CaptureTruncated
@@ -637,6 +639,157 @@ func (g *liveServerToolGate) serveHTTP(writer http.ResponseWriter, request *http
 	}
 	capture.Response = g.responseLog(response, retained.Bytes(), category)
 	g.record(capture)
+}
+
+type liveResponseTerminalTracker struct {
+	expectedModel string
+	frame         []byte
+	lastTwo       [2]byte
+	lastTwoCount  int
+	pendingCR     bool
+	terminal      bool
+}
+
+// Feed keeps only the current SSE frame and checks it when its delimiter
+// arrives. This makes terminal evidence linear in the streamed bytes while
+// preserving the whole response only for the bounded capture itself.
+func (tracker *liveResponseTerminalTracker) Feed(chunk []byte) {
+	if tracker.pendingCR && len(chunk) > 0 {
+		tracker.pendingCR = false
+		if chunk[0] == '\n' {
+			tracker.feedNormalizedBytes(chunk[:1])
+			chunk = chunk[1:]
+		} else {
+			tracker.feedNormalizedByte('\r')
+		}
+	}
+	for len(chunk) > 0 {
+		carriageReturn := bytes.IndexByte(chunk, '\r')
+		if carriageReturn < 0 {
+			tracker.feedNormalizedBytes(chunk)
+			return
+		}
+		tracker.feedNormalizedBytes(chunk[:carriageReturn])
+		chunk = chunk[carriageReturn+1:]
+		if len(chunk) == 0 {
+			tracker.pendingCR = true
+			return
+		}
+		if chunk[0] == '\n' {
+			tracker.feedNormalizedBytes(chunk[:1])
+			chunk = chunk[1:]
+		} else {
+			tracker.feedNormalizedByte('\r')
+		}
+	}
+}
+
+func (tracker *liveResponseTerminalTracker) feedNormalizedByte(value byte) {
+	var single [1]byte
+	single[0] = value
+	tracker.feedNormalizedBytes(single[:])
+}
+
+func (tracker *liveResponseTerminalTracker) feedNormalizedBytes(chunk []byte) {
+	for len(chunk) > 0 {
+		if len(tracker.frame) > 0 && tracker.frame[len(tracker.frame)-1] == '\n' && chunk[0] == '\n' {
+			tracker.frame = append(tracker.frame, '\n')
+			tracker.updateLastTwo(chunk[:1])
+			tracker.finishFrame()
+			chunk = chunk[1:]
+			continue
+		}
+
+		frameEnd := bytes.Index(chunk, []byte("\n\n"))
+		if frameEnd < 0 {
+			tracker.frame = append(tracker.frame, chunk...)
+			tracker.updateLastTwo(chunk)
+			return
+		}
+		frameEnd += 2
+		tracker.frame = append(tracker.frame, chunk[:frameEnd]...)
+		tracker.updateLastTwo(chunk[:frameEnd])
+		tracker.finishFrame()
+		chunk = chunk[frameEnd:]
+	}
+}
+
+func (tracker *liveResponseTerminalTracker) updateLastTwo(chunk []byte) {
+	switch len(chunk) {
+	case 0:
+		return
+	case 1:
+		if tracker.lastTwoCount == 0 {
+			tracker.lastTwo[0] = chunk[0]
+			tracker.lastTwoCount = 1
+		} else if tracker.lastTwoCount == 1 {
+			tracker.lastTwo[1] = chunk[0]
+			tracker.lastTwoCount = 2
+		} else {
+			tracker.lastTwo[0] = tracker.lastTwo[1]
+			tracker.lastTwo[1] = chunk[0]
+		}
+	default:
+		copy(tracker.lastTwo[:], chunk[len(chunk)-len(tracker.lastTwo):])
+		tracker.lastTwoCount = len(tracker.lastTwo)
+	}
+}
+
+func (tracker *liveResponseTerminalTracker) finishFrame() {
+	frame := tracker.frame
+	if len(bytes.TrimSpace(frame[:len(frame)-2])) > 0 {
+		tracker.terminal = liveCompleteResponseTerminal(frame, tracker.expectedModel)
+	}
+	tracker.frame = frame[:0]
+}
+
+func (tracker *liveResponseTerminalTracker) Complete() bool {
+	return !tracker.pendingCR && tracker.terminal && tracker.lastTwoCount == len(tracker.lastTwo) && tracker.lastTwo[0] == '\n' && tracker.lastTwo[1] == '\n'
+}
+
+func TestLiveResponseTerminalTrackerMatchesFinalFrameAcrossChunkBoundaries(t *testing.T) {
+	terminal := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"object\":\"response\",\"status\":\"completed\",\"model\":\"gpt-6-luna\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"output\":[{\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}}\n\n"
+	progress := "event: response.in_progress\ndata: {\"type\":\"response.in_progress\"}\n\n"
+	cases := []struct {
+		name          string
+		body          string
+		expectedModel string
+		want          bool
+	}{
+		{name: "terminal", body: terminal, expectedModel: "gpt-6-luna", want: true},
+		{name: "terminal with CRLF", body: strings.ReplaceAll(terminal, "\n", "\r\n"), expectedModel: "gpt-6-luna", want: true},
+		{name: "terminal then blank frames", body: terminal + "\n \n\n", expectedModel: "gpt-6-luna", want: true},
+		{name: "final nonterminal frame", body: terminal + progress, expectedModel: "gpt-6-luna", want: false},
+		{name: "final partial nonterminal frame", body: terminal + "event: response.in_progress", expectedModel: "gpt-6-luna", want: false},
+		{name: "later terminal frame", body: progress + terminal, expectedModel: "gpt-6-luna", want: true},
+		{name: "unexpected model", body: terminal, expectedModel: "gpt-6-astra", want: false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			want := liveCompleteResponseTerminal([]byte(test.body), test.expectedModel)
+			if want != test.want {
+				t.Fatalf("reference terminal result = %t, want %t", want, test.want)
+			}
+			body := []byte(test.body)
+			for split := 0; split <= len(body); split++ {
+				var tracker liveResponseTerminalTracker
+				tracker.expectedModel = test.expectedModel
+				tracker.Feed(body[:split])
+				tracker.Feed(body[split:])
+				if got := tracker.Complete(); got != want {
+					t.Fatalf("split at byte %d terminal result = %t, want %t", split, got, want)
+				}
+			}
+			var fragmented liveResponseTerminalTracker
+			fragmented.expectedModel = test.expectedModel
+			for _, value := range body {
+				fragmented.Feed([]byte{value})
+			}
+			if got := fragmented.Complete(); got != want {
+				t.Fatalf("one-byte chunks terminal result = %t, want %t", got, want)
+			}
+		})
+	}
 }
 
 func liveCompleteResponseTerminal(body []byte, expectedModel ...string) bool {
