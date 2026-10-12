@@ -227,6 +227,58 @@ func TestPollLoginRetriesRateLimitedAccountVerificationAtProviderTime(t *testing
 	}
 }
 
+func TestPollLoginEscalatesRepeatedRateLimitsUntilSessionExpiry(t *testing.T) {
+	now := time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)
+	host := &oauthDeviceLifecycleHost{userResponses: []transport.Response{
+		{StatusCode: http.StatusForbidden, Body: []byte(`{"message":"You have exceeded a secondary rate limit."}`)},
+		{StatusCode: http.StatusForbidden, Body: []byte(`{"message":"You have exceeded a secondary rate limit."}`)},
+		{StatusCode: http.StatusForbidden, Body: []byte(`{"message":"You have exceeded a secondary rate limit."}`)},
+	}}
+	service := New(host)
+	service.now = func() time.Time { return now }
+	start, err := service.StartLogin(context.Background(), "synthetic-callback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, wantDelay := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
+		response, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+		if err != nil || response.Status != pluginapi.AuthLoginStatusPending || response.Auth.StorageJSON != nil {
+			t.Fatalf("throttled poll %d = %#v, error=%v", index, response, err)
+		}
+		service.oauthMu.Lock()
+		session := service.oauthSession[start.State]
+		next := session.NextPoll
+		if remaining := session.ExpiresAt.Sub(now); wantDelay > remaining {
+			wantDelay = remaining
+		}
+		service.oauthMu.Unlock()
+		if want := now.Add(wantDelay); !next.Equal(want) {
+			t.Fatalf("poll %d retries at %s, want %s", index, next, want)
+		}
+		if early, err := service.PollLogin(context.Background(), "synthetic-callback", start.State); err != nil || early.Status != pluginapi.AuthLoginStatusPending {
+			t.Fatalf("early poll %d = %#v, error=%v", index, early, err)
+		}
+		_, tokens, users := host.counts()
+		if tokens != 1 || users != index+1 {
+			t.Fatalf("poll %d repeated upstream work: tokens=%d users=%d", index, tokens, users)
+		}
+		now = next
+	}
+	response, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+	if err != nil || response.Status != pluginapi.AuthLoginStatusError || response.Auth.StorageJSON != nil {
+		t.Fatalf("expired throttled login = %#v, error=%v", response, err)
+	}
+	_, tokens, users := host.counts()
+	if tokens != 1 || users != 3 {
+		t.Fatalf("expiry repeated upstream work: tokens=%d users=%d", tokens, users)
+	}
+	service.oauthMu.Lock()
+	defer service.oauthMu.Unlock()
+	if len(service.oauthSession) != 0 {
+		t.Fatal("expiry retained throttled login state")
+	}
+}
+
 func TestPollLoginKeepsPermanentUserDenialsTerminal(t *testing.T) {
 	for _, test := range []struct {
 		name   string

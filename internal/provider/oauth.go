@@ -379,6 +379,13 @@ func (s *Service) PollLogin(ctx context.Context, callbackID, state string) (plug
 		retryInterval := interval
 		if isRateLimited {
 			remaining := session.ExpiresAt.Sub(s.now())
+			if remaining > 0 {
+				if interval >= remaining/2 {
+					retryInterval = remaining
+				} else {
+					retryInterval = interval * 2
+				}
+			}
 			providerRetry := remaining
 			if remaining > 0 && rateLimitErr.RetryAfterSeconds < int64(remaining/time.Second) {
 				providerRetry = time.Duration(rateLimitErr.RetryAfterSeconds) * time.Second
