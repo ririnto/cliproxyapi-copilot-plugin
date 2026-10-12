@@ -33,9 +33,12 @@ func responsesRequestToClaude(model string, body []byte, stream bool) ([]byte, e
 	toolRestore := make(map[string]responsesClaudeToolPayload)
 	toolCallsByCallID := make(map[string]responsesClaudeToolPayload)
 	toolCallsByClaudeID := make(map[string]struct{})
+	webSearchRestore := make(map[string]gjson.Result)
 	if input.IsArray() {
 		for index, item := range input.Array() {
 			switch item.Get("type").String() {
+			case "web_search_call":
+				webSearchRestore[strings.TrimPrefix(item.Get("id").String(), "ws_")] = item
 			case "reasoning":
 				encrypted := item.Get("encrypted_content")
 				if encrypted.Type != gjson.String || encrypted.String() == "" {
@@ -122,17 +125,35 @@ func responsesRequestToClaude(model string, body []byte, stream bool) ([]byte, e
 			return nil, fmt.Errorf("Responses tool_choice required cannot be preserved by Claude Messages without translated tools")
 		}
 	}
-	if len(reasoningRestore) == 0 && len(toolRestore) == 0 {
+	if len(reasoningRestore) == 0 && len(toolRestore) == 0 && len(webSearchRestore) == 0 {
 		return out, nil
 	}
 	reasoningCounts := make(map[string]int, len(reasoningRestore))
 	toolUseCounts := make(map[string]int, len(toolRestore))
 	toolResultCounts := make(map[string]int, len(toolRestore))
+	webSearchUseCounts := make(map[string]int, len(webSearchRestore))
+	webSearchResultCounts := make(map[string]int, len(webSearchRestore))
 	for messageIndex, message := range gjson.GetBytes(out, "messages").Array() {
 		for blockIndex, block := range message.Get("content").Array() {
 			var restored []byte
 			var err error
 			switch block.Get("type").String() {
+			case "server_tool_use":
+				id := block.Get("id").String()
+				item, ok := webSearchRestore[id]
+				if !ok || block.Get("name").String() != "web_search" {
+					return nil, fmt.Errorf("Responses web search call could not be restored exactly in Claude request")
+				}
+				restored, err = sjson.SetBytes([]byte(block.Raw), "input.query", item.Get("action.query").String())
+				webSearchUseCounts[id]++
+			case "web_search_tool_result":
+				id := block.Get("tool_use_id").String()
+				item, ok := webSearchRestore[id]
+				if !ok {
+					return nil, fmt.Errorf("Responses web search result could not be restored exactly in Claude request")
+				}
+				restored, err = sjson.SetRawBytes([]byte(block.Raw), "content", []byte(item.Get("results").Raw))
+				webSearchResultCounts[id]++
 			case "redacted_thinking":
 				payload, ok := reasoningRestore[block.Get("data").String()]
 				if !ok {
@@ -196,6 +217,11 @@ func responsesRequestToClaude(model string, body []byte, stream bool) ([]byte, e
 	for marker, payload := range toolRestore {
 		if toolUseCounts[marker] != 1 || (payload.outputSeen && toolResultCounts[marker] != 1) || toolResultCounts[marker] > 1 {
 			return nil, fmt.Errorf("Responses tool identity could not be restored exactly in Claude request")
+		}
+	}
+	for id := range webSearchRestore {
+		if webSearchUseCounts[id] != 1 || webSearchResultCounts[id] != 1 {
+			return nil, fmt.Errorf("Responses web search pair could not be restored exactly in Claude request")
 		}
 	}
 	return out, nil

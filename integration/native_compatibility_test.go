@@ -29,6 +29,63 @@ func TestNativeHostToolAndSystemCompatibility(t *testing.T) {
 	upstream := httptest.NewServer(state)
 	t.Cleanup(upstream.Close)
 	base := startProxy(t, binary, upstream.URL)
+	t.Run("HostedSearchReplay", func(t *testing.T) {
+		const query = "  exact fixture query\n\t "
+		const searchID = "srvtoolu_fixture_native_replay"
+		for _, stream := range []bool{false, true} {
+			for _, results := range []any{
+				[]any{map[string]any{"type": "web_search_result", "url": "https://example.test/report?source=fixture", "title": "Fixture report", "encrypted_content": "fixture_opaque_replay_token"}},
+				[]any{},
+				map[string]any{"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"},
+			} {
+				t.Run(fmt.Sprintf("Stream%t/%T/%v", stream, results, results), func(t *testing.T) {
+					search := map[string]any{"type": "web_search_call", "id": "ws_" + searchID, "status": "completed", "action": map[string]any{"type": "search", "query": query}, "results": results}
+					request := map[string]any{"model": "claude-sonnet-5.5", "stream": stream, "input": []any{
+						map[string]any{"type": "message", "role": "user", "content": "Search."},
+						search,
+						map[string]any{"type": "message", "role": "user", "content": "Continue without another search."},
+					}}
+					before := upstreamRequestCount(state)
+					status, response := postProxyWithSession(t, base+"/v1/responses", request, "fixture-hosted-search-replay")
+					if status != http.StatusOK || upstreamRequestCount(state) != before+1 {
+						t.Fatalf("replay did not reach the fixture exactly once: status=%d body=%s", status, response)
+					}
+					captured, path := lastUpstreamRequest(t, state)
+					wantMessages := []any{
+						map[string]any{"role": "user", "content": "Search."},
+						map[string]any{"role": "assistant", "content": []any{
+							map[string]any{"type": "server_tool_use", "id": searchID, "name": "web_search", "input": map[string]any{"query": query}},
+							map[string]any{"type": "web_search_tool_result", "tool_use_id": searchID, "content": results},
+						}},
+						map[string]any{"role": "user", "content": "Continue without another search."},
+					}
+					if path != "/v1/messages" || captured["stream"] != stream {
+						t.Fatalf("replay destination changed: path=%q request=%v", path, captured)
+					}
+					assertEqualJSON(t, captured["messages"], wantMessages)
+					for _, field := range []string{"id", "status", "action", "results"} {
+						original := search[field]
+						switch field {
+						case "id":
+							search[field] = "ws_fixture_native_search"
+						case "status":
+							search[field] = "in_progress"
+						case "action":
+							search[field] = map[string]any{"type": "search", "query": query, "queries": []string{"one", "two"}}
+						case "results":
+							delete(search, field)
+						}
+						before := upstreamRequestCount(state)
+						status, response := postProxyWithSession(t, base+"/v1/responses", request, "fixture-hosted-search-rejected")
+						if status != http.StatusUnprocessableEntity || !bytes.Contains(response, []byte("web search")) || upstreamRequestCount(state) != before {
+							t.Fatalf("lossy %s dispatched inference: status=%d body=%s", field, status, response)
+						}
+						search[field] = original
+					}
+				})
+			}
+		}
+	})
 	t.Run("ExclusionHeader", func(t *testing.T) {
 		body, err := json.Marshal(map[string]any{"model": "claude-sonnet-5.5", "input": "Say hello.", "tools": []any{map[string]any{"type": "image_generation"}}})
 		if err != nil {

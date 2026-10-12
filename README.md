@@ -391,6 +391,15 @@ Copilot can issue opaque tool item IDs longer than 64 characters.
 The bridge preserves those IDs and lets Copilot validate native requests.
 Use a matching native protocol endpoint for content the bridge cannot translate.
 
+Responses history can replay a completed Claude-compatible web search through Messages.
+The bridge reuses the SDK conversion and preserves the server-tool ID, exact query, result content, and opaque replay tokens.
+An explicit empty result list and a native search-error object retain their original shapes.
+Native Responses identities, additional action state, incomplete searches, and missing result content fail with HTTP 422 before inference.
+Keep richer provider search history on its native Responses endpoint.
+
+These replay checks use synthetic fixtures and retained sanitized provider captures.
+They do not establish live Claude WebSearch support, correct result/citation URL pairing, PNG answer quality, or original-client `response.interrupt` emission.
+
 ## Stop, rollback, and removal
 
 ```sh
