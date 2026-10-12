@@ -264,7 +264,14 @@ func TestCapturedResponsesSearchRetainsNativeStateAndRejectsChat(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			out, err := ResponseFromEndpoint(context.Background(), EndpointResponses, "openai", "gpt-6-luna", request, nil, test.body)
-			if err == nil || !strings.Contains(err.Error(), test.wantError) || len(out) != 0 {
+			if test.name == "answer citations" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if gjson.GetBytes(out, "choices.0.message.content").String() != message.Get("content.0.text").String() || gjson.GetBytes(out, "choices.0.message.annotations.0.url_citation.url").String() != message.Get("content.0.annotations.0.url").String() {
+					t.Fatalf("representable citation or text changed: %s", out)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), test.wantError) || len(out) != 0 {
 				t.Fatalf("unrepresentable hosted response was accepted: output=%s error=%v", out, err)
 			}
 			var state any
