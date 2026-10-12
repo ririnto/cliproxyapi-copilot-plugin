@@ -12,8 +12,9 @@ import (
 
 func TestChatErrorFinishReasonFailsCrossFormatResponses(t *testing.T) {
 	t.Parallel()
-	request, response := geminiChatSearchCapture(t)
-	translated, err := RequestForEndpointFrom("openai", "gemini-3.8-flash", request, false, EndpointResponses)
+	_, response := geminiChatSearchCapture(t)
+	request := []byte(`{"model":"gemini-3.8-flash","input":"Search the fixture question."}`)
+	translated, err := RequestForEndpointFrom("openai-response", "gemini-3.8-flash", request, false, EndpointChatCompletions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,8 +27,9 @@ func TestChatErrorFinishReasonFailsCrossFormatResponses(t *testing.T) {
 
 func TestChatErrorFinishReasonFailsCrossFormatMessages(t *testing.T) {
 	t.Parallel()
-	request, response := geminiChatSearchCapture(t)
-	translated, err := RequestForEndpointFrom("openai", "gemini-3.8-flash", request, false, EndpointMessages)
+	_, response := geminiChatSearchCapture(t)
+	request := []byte(`{"model":"gemini-3.8-flash","max_tokens":128,"messages":[{"role":"user","content":"Search the fixture question."}]}`)
+	translated, err := RequestForEndpointFrom("claude", "gemini-3.8-flash", request, false, EndpointChatCompletions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,17 +42,17 @@ func TestChatErrorFinishReasonFailsCrossFormatMessages(t *testing.T) {
 
 func TestChatErrorFinishReasonStopsCrossFormatStreams(t *testing.T) {
 	t.Parallel()
-	request, _ := geminiChatSearchCapture(t)
 	for _, test := range []struct {
 		name        string
 		destination string
-		endpoint    string
+		request     string
 	}{
-		{name: "Responses", destination: "openai-response", endpoint: EndpointResponses},
-		{name: "Messages", destination: "claude", endpoint: EndpointMessages},
+		{name: "Responses", destination: "openai-response", request: `{"model":"gemini-3.8-flash","input":"Search the fixture question."}`},
+		{name: "Messages", destination: "claude", request: `{"model":"gemini-3.8-flash","max_tokens":128,"messages":[{"role":"user","content":"Search the fixture question."}]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			translated, err := RequestForEndpointFrom("openai", "gemini-3.8-flash", request, true, test.endpoint)
+			request := []byte(test.request)
+			translated, err := RequestForEndpointFrom(test.destination, "gemini-3.8-flash", request, true, EndpointChatCompletions)
 			if err != nil {
 				t.Fatal(err)
 			}
