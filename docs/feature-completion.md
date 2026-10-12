@@ -124,6 +124,14 @@ Provider access is explicitly denied. The Docker lease and additional capability
 
 ## Audit Evidence
 
+The combined source reviewed at f2b8ef3, merged by [PR #44](https://github.com/ririnto/cpa-copilot-bridge/pull/44), passes the full Go suite, nine Python checks, full race suite, go vet and module verification.
+The current Darwin C-shared plugin and paired host pass all 14 required native groups with zero skips.
+Both public CI test/package lanes passed; the downloaded Linux package checksum, two ZIP root entries, ELF64 AMD64 architecture and paired-host metadata were checked.
+The selected dependency graph is unchanged from the audit vulnerability scan: zero called/imported vulnerable packages; the unimported module-only advisory remains disclosed.
+Task-owned current-source authless startup returned models HTTP 200 with empty auth and external network denied; teardown reaped the host.
+No target-provider inference, local Docker execution, release workflow or live deployment ran.
+
+
 Independent documentation and source audits ran in separate worktrees.
 Post-opening code/approval reviews use Sol/high; publication exposure scans are separate.
 The initial full-race capture timeout and OAuth review findings remain recorded and were fixed without weakening deadlines or oracles.
