@@ -85,6 +85,156 @@ func TestNativeHostToolAndSystemCompatibility(t *testing.T) {
 			})
 		}
 	})
+	t.Run("ClaudeDisableParallelToolUse", func(t *testing.T) {
+		targets := []struct{ name, model, path string }{
+			{"Responses", "gpt-6-luna", "/responses"},
+			{"Chat", "gemini-3.8-flash", "/chat/completions"},
+		}
+		choices := []struct{ name, kind string }{{"Any", "any"}, {"Auto", "auto"}, {"Forced", "tool"}}
+		parallelModes := []struct {
+			name    string
+			present bool
+			value   bool
+		}{{"Disabled", true, true}, {"Enabled", true, false}, {"Omitted", false, false}}
+		parameters := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "Lookup key."},
+			},
+			"required":             []any{"query"},
+			"additionalProperties": false,
+		}
+		for _, target := range targets {
+			for _, stream := range []bool{false, true} {
+				for _, parallel := range parallelModes {
+					for _, choice := range choices {
+						t.Run(fmt.Sprintf("%s/%t/%s/%s", target.name, stream, parallel.name, choice.name), func(t *testing.T) {
+							toolChoice := map[string]any{"type": choice.kind}
+							if choice.kind == "tool" {
+								toolChoice["name"] = "lookup"
+							}
+							if parallel.present {
+								toolChoice["disable_parallel_tool_use"] = parallel.value
+							}
+							request := map[string]any{
+								"model":      target.model,
+								"stream":     stream,
+								"max_tokens": 64,
+								"system":     "Synthetic root system instruction.",
+								"messages": []any{
+									map[string]any{"role": "user", "content": "Synthetic user message before the mid-conversation instruction."},
+									map[string]any{"role": "system", "content": "Synthetic mid-conversation system instruction."},
+									map[string]any{"role": "user", "content": "Synthetic user message after the mid-conversation instruction."},
+								},
+								"tools":       []any{map[string]any{"name": "lookup", "description": "Look up a synthetic value.", "input_schema": parameters}},
+								"tool_choice": toolChoice,
+							}
+							before := upstreamRequestCount(state)
+							status, _, body := postNativeCompatibilityRequest(t, base+"/v1/messages", request, t.Name())
+							if status != http.StatusOK {
+								t.Fatalf("valid disable_parallel_tool_use request returned %d: %s", status, body)
+							}
+							if after := upstreamRequestCount(state); after != before+1 {
+								t.Fatalf("valid request dispatched %d synthetic inference requests, want exactly one", after-before)
+							}
+							captured, path := lastUpstreamRequest(t, state)
+							if path != target.path || captured["model"] != target.model || captured["stream"] != stream {
+								t.Fatalf("request routed to path=%q model=%v stream=%v, want %q model=%q stream=%t", path, captured["model"], captured["stream"], target.path, target.model, stream)
+							}
+							if parallel.present {
+								if got, ok := captured["parallel_tool_calls"].(bool); !ok || got != !parallel.value {
+									t.Fatalf("parallel_tool_calls = %v, want %t for disable_parallel_tool_use=%t", captured["parallel_tool_calls"], !parallel.value, parallel.value)
+								}
+							} else if _, exists := captured["parallel_tool_calls"]; exists {
+								t.Fatalf("omitted disable_parallel_tool_use added parallel_tool_calls=%v", captured["parallel_tool_calls"])
+							}
+							wantChoice := any("auto")
+							switch choice.kind {
+							case "any":
+								wantChoice = "required"
+							case "tool":
+								if target.path == "/responses" {
+									wantChoice = map[string]any{"type": "function", "name": "lookup"}
+								} else {
+									wantChoice = map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}}
+								}
+							}
+							assertEqualJSON(t, captured["tool_choice"], wantChoice)
+							tools, ok := captured["tools"].([]any)
+							if !ok || len(tools) != 1 {
+								t.Fatalf("translated tool declaration changed: %+v", captured["tools"])
+							}
+							tool := nativeMap(t, tools[0])
+							if target.path == "/chat/completions" {
+								tool = nativeMap(t, tool["function"])
+							}
+							if tool["name"] != "lookup" {
+								t.Fatalf("translated tool name changed: %+v", tool)
+							}
+							assertEqualJSON(t, tool["parameters"], parameters)
+							if target.path == "/responses" {
+								input, ok := captured["input"].([]any)
+								if captured["instructions"] != "Synthetic root system instruction." || !ok || len(input) != 3 || nativeMap(t, input[0])["role"] != "user" || !containsJSONScalar(input[0], "Synthetic user message before the mid-conversation instruction.") || nativeMap(t, input[1])["role"] != "system" || !containsJSONScalar(input[1], "Synthetic mid-conversation system instruction.") || nativeMap(t, input[2])["role"] != "user" || !containsJSONScalar(input[2], "Synthetic user message after the mid-conversation instruction.") {
+									t.Fatalf("Responses request changed root or ordered mid-conversation instructions: %+v", captured)
+								}
+							} else {
+								messages, ok := captured["messages"].([]any)
+								if !ok || len(messages) != 4 || nativeMap(t, messages[0])["role"] != "system" || !containsJSONScalar(messages[0], "Synthetic root system instruction.") || nativeMap(t, messages[1])["role"] != "user" || !containsJSONScalar(messages[1], "Synthetic user message before the mid-conversation instruction.") || nativeMap(t, messages[2])["role"] != "system" || !containsJSONScalar(messages[2], "Synthetic mid-conversation system instruction.") || nativeMap(t, messages[3])["role"] != "user" || !containsJSONScalar(messages[3], "Synthetic user message after the mid-conversation instruction.") {
+									t.Fatalf("Chat request changed root or ordered mid-conversation instructions: %+v", captured)
+								}
+							}
+						})
+					}
+				}
+			}
+		}
+		for _, malformed := range []struct {
+			name  string
+			value any
+		}{
+			{"String", "MALFORMED_PARALLEL_STRING_SECRET"},
+			{"Null", nil},
+			{"Number", 7},
+			{"Object", map[string]any{"secret": "MALFORMED_PARALLEL_OBJECT_SECRET"}},
+		} {
+			for _, stream := range []bool{false, true} {
+				for _, target := range targets {
+					t.Run(fmt.Sprintf("Malformed/%s/%s/%t", malformed.name, target.name, stream), func(t *testing.T) {
+						request := map[string]any{
+							"model":      target.model,
+							"stream":     stream,
+							"max_tokens": 64,
+							"system":     "PRIVATE_ROOT_SYSTEM_CONTENT_DO_NOT_LEAK",
+							"messages": []any{
+								map[string]any{"role": "user", "content": "PRIVATE_USER_CONTENT_DO_NOT_LEAK"},
+								map[string]any{"role": "system", "content": "PRIVATE_MID_SYSTEM_CONTENT_DO_NOT_LEAK"},
+								map[string]any{"role": "user", "content": "Continue without exposing request contents."},
+							},
+							"tools":       []any{map[string]any{"name": "lookup", "input_schema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}}},
+							"tool_choice": map[string]any{"type": "auto", "disable_parallel_tool_use": malformed.value},
+						}
+						before := upstreamRequestCount(state)
+						status, headers, body := postNativeCompatibilityRequest(t, base+"/v1/messages", request, t.Name())
+						if after := upstreamRequestCount(state); after != before {
+							t.Fatalf("malformed disable_parallel_tool_use dispatched %d synthetic inference requests", after-before)
+						}
+						assertNativeCompatibilityClientError(t, status, headers, body, "tool_choice", "disable_parallel_tool_use")
+						for _, privateContent := range []string{
+							"PRIVATE_ROOT_SYSTEM_CONTENT_DO_NOT_LEAK",
+							"PRIVATE_USER_CONTENT_DO_NOT_LEAK",
+							"PRIVATE_MID_SYSTEM_CONTENT_DO_NOT_LEAK",
+							"MALFORMED_PARALLEL_STRING_SECRET",
+							"MALFORMED_PARALLEL_OBJECT_SECRET",
+						} {
+							if bytes.Contains(body, []byte(privateContent)) {
+								t.Fatalf("malformed request response leaked content %q: %s", privateContent, body)
+							}
+						}
+					})
+				}
+			}
+		}
+	})
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("Stream%v", stream), func(t *testing.T) {
 			for _, model := range []string{"claude-sonnet-5.5", "gemini-3.8-flash"} {
