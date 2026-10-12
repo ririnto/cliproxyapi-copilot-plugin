@@ -63,6 +63,25 @@ type githubUser struct {
 	ID    int64  `json:"id"`
 }
 
+type rateLimitedGitHubUserError struct {
+	RetryAfterSeconds int64
+	cause             error
+}
+
+func (e *rateLimitedGitHubUserError) Error() string {
+	if e == nil || e.cause == nil {
+		return "GitHub account verification was rate limited"
+	}
+	return e.cause.Error()
+}
+
+func (e *rateLimitedGitHubUserError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
 type deviceSession struct {
 	DeviceCode    string
 	ClientID      string
@@ -351,11 +370,24 @@ func (s *Service) PollLogin(ctx context.Context, callbackID, state string) (plug
 	}
 	user, errUser := s.fetchGitHubUser(ctx, callbackID, token.AccessToken)
 	if errUser != nil {
-		if !retryOAuthUserVerification(errUser) {
+		var rateLimitErr *rateLimitedGitHubUserError
+		isRateLimited := errors.As(errUser, &rateLimitErr)
+		if !isRateLimited && !retryOAuthUserVerification(errUser) {
 			s.finishPoll(state, session, interval, true)
 			return pluginapi.AuthLoginPollResponse{}, errUser
 		}
-		if !s.finishPoll(state, session, interval, false) {
+		retryInterval := interval
+		if isRateLimited {
+			remaining := session.ExpiresAt.Sub(s.now())
+			providerRetry := remaining
+			if remaining > 0 && rateLimitErr.RetryAfterSeconds < int64(remaining/time.Second) {
+				providerRetry = time.Duration(rateLimitErr.RetryAfterSeconds) * time.Second
+			}
+			if providerRetry > retryInterval {
+				retryInterval = providerRetry
+			}
+		}
+		if !s.finishPoll(state, session, retryInterval, false) {
 			return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "GitHub device login session expired"}, nil
 		}
 		if oauthAccessTokenExpired(token, tokenIssuedAt, s.now()) {
@@ -511,7 +543,11 @@ func (s *Service) fetchGitHubUser(ctx context.Context, callbackID, accessToken s
 		return githubUser{}, fmt.Errorf("fetch GitHub user: %w", errDo)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return githubUser{}, upstreamStatusError(resp.StatusCode, redact.ErrorBody(resp.Body, accessToken))
+		upstreamErr := upstreamStatusError(resp.StatusCode, redact.ErrorBody(resp.Body, accessToken))
+		if retryAfter, rateLimited := githubUserRateLimitRetryAfter(resp, s.now()); rateLimited {
+			return githubUser{}, &rateLimitedGitHubUserError{RetryAfterSeconds: retryAfter, cause: upstreamErr}
+		}
+		return githubUser{}, upstreamErr
 	}
 	var user githubUser
 	if errUnmarshal := json.Unmarshal(resp.Body, &user); errUnmarshal != nil {
@@ -522,6 +558,104 @@ func (s *Service) fetchGitHubUser(ctx context.Context, callbackID, accessToken s
 		return githubUser{}, fmt.Errorf("GitHub user response has no valid account identity")
 	}
 	return user, nil
+}
+
+func githubUserRateLimitRetryAfter(resp transport.Response, now time.Time) (int64, bool) {
+	if resp.StatusCode != http.StatusForbidden {
+		return 0, false
+	}
+	retryAfterValues := resp.Headers.Values("Retry-After")
+	hasRetryAfter := len(retryAfterValues) > 0
+	remainingIsZero := strings.TrimSpace(resp.Headers.Get("X-RateLimit-Remaining")) == "0"
+	bodyRateLimited := githubUserRateLimitResponseBody(resp.Body)
+	if !hasRetryAfter && !remainingIsZero && !bodyRateLimited {
+		return 0, false
+	}
+
+	var retryAfterSeconds int64
+	hasTiming := false
+	fallbackDelay := false
+	for _, value := range retryAfterValues {
+		seconds, ok := parseRetryAfterSeconds(value, now)
+		if !ok {
+			fallbackDelay = true
+			continue
+		}
+		if !hasTiming || seconds > retryAfterSeconds {
+			retryAfterSeconds = seconds
+		}
+		hasTiming = true
+	}
+	if remainingIsZero {
+		resetValue := strings.TrimSpace(resp.Headers.Get("X-RateLimit-Reset"))
+		if resetValue == "" {
+			fallbackDelay = true
+		} else if seconds, ok := parseRateLimitResetSeconds(resetValue, now); ok {
+			if !hasTiming || seconds > retryAfterSeconds {
+				retryAfterSeconds = seconds
+			}
+			hasTiming = true
+		} else {
+			fallbackDelay = true
+		}
+	}
+	if bodyRateLimited && !hasTiming {
+		fallbackDelay = true
+	}
+	if fallbackDelay && retryAfterSeconds < 60 {
+		retryAfterSeconds = 60
+	}
+	if retryAfterSeconds <= 0 {
+		retryAfterSeconds = 1
+	}
+	return retryAfterSeconds, true
+}
+
+func parseRetryAfterSeconds(value string, now time.Time) (int64, bool) {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		return seconds, true
+	}
+	retryAt, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	delay := retryAt.Sub(now)
+	if delay <= 0 {
+		return 0, true
+	}
+	seconds := int64(delay / time.Second)
+	if delay%time.Second != 0 {
+		seconds++
+	}
+	return seconds, true
+}
+
+func parseRateLimitResetSeconds(value string, now time.Time) (int64, bool) {
+	resetAtUnix, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	delay := time.Unix(resetAtUnix, 0).Sub(now)
+	if delay <= 0 {
+		return 0, true
+	}
+	seconds := int64(delay / time.Second)
+	if delay%time.Second != 0 {
+		seconds++
+	}
+	return seconds, true
+}
+
+func githubUserRateLimitResponseBody(body []byte) bool {
+	var response struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(response.Message))
+	return strings.Contains(message, "secondary rate limit") || strings.Contains(message, "api rate limit exceeded")
 }
 
 func (s *Service) RefreshAuth(ctx context.Context, callbackID string, req pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error) {

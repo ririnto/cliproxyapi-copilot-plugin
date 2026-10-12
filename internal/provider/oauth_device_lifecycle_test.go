@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +26,10 @@ type oauthDeviceLifecycleHost struct {
 	userErrors     []error
 	deviceEntered  chan struct{}
 	deviceRelease  <-chan struct{}
+	userEntered    chan struct{}
+	userRelease    chan struct{}
+	activeUsers    int
+	maxActiveUsers int
 }
 
 func (h *oauthDeviceLifecycleHost) Do(ctx context.Context, _ string, request transport.Request) (transport.Response, error) {
@@ -55,21 +61,38 @@ func (h *oauthDeviceLifecycleHost) Do(ctx context.Context, _ string, request tra
 		return transport.Response{StatusCode: http.StatusOK, Body: []byte(`{"access_token":"synthetic-access-token","refresh_token":"synthetic-refresh-token","token_type":"bearer","scope":"read:user","expires_in":3600,"refresh_token_expires_in":7200}`)}, nil
 	case "https://api.github.com/user":
 		h.mu.Lock()
-		defer h.mu.Unlock()
 		h.userRequests++
+		h.activeUsers++
+		if h.activeUsers > h.maxActiveUsers {
+			h.maxActiveUsers = h.activeUsers
+		}
+		entered := h.userEntered
+		release := h.userRelease
+		var response transport.Response
+		var requestErr error
 		if len(h.userErrors) > 0 {
-			err := h.userErrors[0]
+			requestErr = h.userErrors[0]
 			h.userErrors = h.userErrors[1:]
-			if err != nil {
-				return transport.Response{}, err
-			}
 		}
 		if len(h.userResponses) > 0 {
-			response := h.userResponses[0]
+			response = h.userResponses[0]
 			h.userResponses = h.userResponses[1:]
-			return response, nil
+		} else {
+			response = transport.Response{StatusCode: http.StatusOK, Body: []byte(`{"login":"synthetic-user","id":4242}`)}
 		}
-		return transport.Response{StatusCode: http.StatusOK, Body: []byte(`{"login":"synthetic-user","id":4242}`)}, nil
+		h.mu.Unlock()
+		if entered != nil {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				requestErr = ctx.Err()
+			}
+		}
+		h.mu.Lock()
+		h.activeUsers--
+		h.mu.Unlock()
+		return response, requestErr
 	default:
 		return transport.Response{}, fmt.Errorf("unexpected synthetic request %s %s", request.Method, request.URL)
 	}
@@ -93,6 +116,308 @@ func (h *oauthDeviceLifecycleHost) counts() (device, token, user int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.deviceRequests, h.tokenRequests, h.userRequests
+}
+
+func (h *oauthDeviceLifecycleHost) maxConcurrentUsers() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.maxActiveUsers
+}
+
+func TestPollLoginRetriesRateLimitedAccountVerificationAtProviderTime(t *testing.T) {
+	issuedAt := time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)
+	for _, test := range []struct {
+		name       string
+		headers    http.Header
+		body       string
+		retryAfter time.Duration
+	}{
+		{
+			name:       "retry after",
+			headers:    http.Header{"Retry-After": []string{"30"}},
+			body:       `{"message":"synthetic provider detail","private":"synthetic-response-marker"}`,
+			retryAfter: 30 * time.Second,
+		},
+		{
+			name: "primary reset",
+			headers: http.Header{
+				"X-Ratelimit-Remaining": []string{"0"},
+				"X-Ratelimit-Reset":     []string{strconv.FormatInt(issuedAt.Add(45*time.Second).Unix(), 10)},
+			},
+			body:       `{"message":"synthetic provider detail"}`,
+			retryAfter: 45 * time.Second,
+		},
+		{
+			name:       "documented secondary limit response",
+			body:       `{"message":"You have exceeded a secondary rate limit.","private":"synthetic-response-marker"}`,
+			retryAfter: time.Minute,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := issuedAt
+			var clockMu sync.Mutex
+			host := &oauthDeviceLifecycleHost{userResponses: []transport.Response{
+				{StatusCode: http.StatusForbidden, Headers: test.headers, Body: []byte(test.body)},
+				{StatusCode: http.StatusOK, Body: []byte(`{"login":"synthetic-user","id":4242}`)},
+			}}
+			service := New(host)
+			service.now = func() time.Time {
+				clockMu.Lock()
+				defer clockMu.Unlock()
+				return now
+			}
+			start, err := service.StartLogin(context.Background(), "synthetic-callback")
+			if err != nil {
+				t.Fatalf("StartLogin: %v", err)
+			}
+
+			first, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+			if err != nil || first.Status != pluginapi.AuthLoginStatusPending || first.Auth.StorageJSON != nil {
+				t.Fatalf("rate limited poll = %#v, error=%v", first, err)
+			}
+			service.oauthMu.Lock()
+			pending := service.oauthSession[start.State]
+			if pending == nil || pending.PendingToken == nil || !pending.TokenIssuedAt.Equal(issuedAt) {
+				service.oauthMu.Unlock()
+				t.Fatal("rate limited account verification did not retain the original device token")
+			}
+			if want := issuedAt.Add(test.retryAfter); !pending.NextPoll.Equal(want) {
+				service.oauthMu.Unlock()
+				t.Fatalf("next account verification = %s, want provider retry time %s", pending.NextPoll, want)
+			}
+			service.oauthMu.Unlock()
+
+			tooSoon, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+			if err != nil || tooSoon.Status != pluginapi.AuthLoginStatusPending || tooSoon.Auth.StorageJSON != nil {
+				t.Fatalf("poll before provider retry time = %#v, error=%v", tooSoon, err)
+			}
+			_, tokenRequests, userRequests := host.counts()
+			if tokenRequests != 1 || userRequests != 1 {
+				t.Fatalf("early poll repeated upstream work: token=%d user=%d", tokenRequests, userRequests)
+			}
+
+			clockMu.Lock()
+			now = issuedAt.Add(test.retryAfter)
+			clockMu.Unlock()
+			recovered, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+			if err != nil || recovered.Status != pluginapi.AuthLoginStatusSuccess {
+				t.Fatalf("poll at provider retry time = %#v, error=%v", recovered, err)
+			}
+			storage, err := parseStorage(recovered.Auth.StorageJSON)
+			if err != nil {
+				t.Fatalf("parse verified credentials: %v", err)
+			}
+			if want := issuedAt.Add(time.Hour).Unix(); storage.ExpiresAt != want {
+				t.Fatalf("access token expiry = %d, want original issuance expiry %d", storage.ExpiresAt, want)
+			}
+			if want := issuedAt.Add(2 * time.Hour).Unix(); storage.RefreshTokenExpiresAt != want {
+				t.Fatalf("refresh token expiry = %d, want original issuance expiry %d", storage.RefreshTokenExpiresAt, want)
+			}
+			_, tokenRequests, userRequests = host.counts()
+			if tokenRequests != 1 || userRequests != 2 {
+				t.Fatalf("rate limit recovery exchanged device token again: token=%d user=%d", tokenRequests, userRequests)
+			}
+			service.oauthMu.Lock()
+			_, retained := service.oauthSession[start.State]
+			service.oauthMu.Unlock()
+			if retained {
+				t.Fatal("successful rate limit recovery retained the device session")
+			}
+		})
+	}
+}
+
+func TestPollLoginKeepsPermanentUserDenialsTerminal(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, body: `{"message":"synthetic unauthorized response"}`},
+		{name: "forbidden without rate limit evidence", status: http.StatusForbidden, body: `{"message":"Resource not accessible by integration"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := &oauthDeviceLifecycleHost{userResponses: []transport.Response{{StatusCode: test.status, Body: []byte(test.body)}}}
+			service := New(host)
+			start, err := service.StartLogin(context.Background(), "synthetic-callback")
+			if err != nil {
+				t.Fatalf("StartLogin: %v", err)
+			}
+			poll, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+			if err == nil || poll.Status == pluginapi.AuthLoginStatusPending || poll.Auth.StorageJSON != nil {
+				t.Fatalf("permanent denial poll = %#v, error=%v", poll, err)
+			}
+			if strings.Contains(err.Error(), "synthetic") {
+				t.Fatal("permanent denial exposed provider response text")
+			}
+			service.oauthMu.Lock()
+			_, retained := service.oauthSession[start.State]
+			service.oauthMu.Unlock()
+			if retained {
+				t.Fatal("permanent denial retained the device session")
+			}
+			_, tokenRequests, userRequests := host.counts()
+			if tokenRequests != 1 || userRequests != 1 {
+				t.Fatalf("permanent denial caused extra upstream work: token=%d user=%d", tokenRequests, userRequests)
+			}
+		})
+	}
+}
+
+func TestPollLoginSerializesBlockedAccountVerification(t *testing.T) {
+	issuedAt := time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)
+	host := &oauthDeviceLifecycleHost{
+		userEntered: make(chan struct{}, 1),
+		userRelease: make(chan struct{}),
+	}
+	service := New(host)
+	service.now = func() time.Time { return issuedAt }
+	start, err := service.StartLogin(context.Background(), "synthetic-callback")
+	if err != nil {
+		t.Fatalf("StartLogin: %v", err)
+	}
+
+	firstResult := make(chan struct {
+		poll pluginapi.AuthLoginPollResponse
+		err  error
+	}, 1)
+	go func() {
+		poll, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+		firstResult <- struct {
+			poll pluginapi.AuthLoginPollResponse
+			err  error
+		}{poll: poll, err: err}
+	}()
+	select {
+	case <-host.userEntered:
+	case <-time.After(5 * time.Second):
+		close(host.userRelease)
+		t.Fatal("account verification did not reach the blocked /user request")
+	}
+
+	secondResult := make(chan struct {
+		poll pluginapi.AuthLoginPollResponse
+		err  error
+	}, 1)
+	go func() {
+		poll, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+		secondResult <- struct {
+			poll pluginapi.AuthLoginPollResponse
+			err  error
+		}{poll: poll, err: err}
+	}()
+	var second struct {
+		poll pluginapi.AuthLoginPollResponse
+		err  error
+	}
+	select {
+	case second = <-secondResult:
+	case <-time.After(5 * time.Second):
+		close(host.userRelease)
+		<-firstResult
+		<-secondResult
+		t.Fatal("overlapping poll waited on account verification instead of returning pending")
+	}
+	if second.err != nil || second.poll.Status != pluginapi.AuthLoginStatusPending || second.poll.Auth.StorageJSON != nil {
+		close(host.userRelease)
+		t.Fatalf("overlapping poll = %#v, error=%v", second.poll, second.err)
+	}
+	select {
+	case premature := <-firstResult:
+		close(host.userRelease)
+		t.Fatalf("account verification returned before /user completed: %#v, error=%v", premature.poll, premature.err)
+	default:
+	}
+	service.oauthMu.Lock()
+	pending := service.oauthSession[start.State]
+	if pending == nil || pending.PendingToken == nil || !pending.Polling || !pending.TokenIssuedAt.Equal(issuedAt) {
+		service.oauthMu.Unlock()
+		close(host.userRelease)
+		t.Fatal("blocked account verification did not retain the issued token while polling")
+	}
+	service.oauthMu.Unlock()
+	_, tokenRequests, userRequests := host.counts()
+	if tokenRequests != 1 || userRequests != 1 || host.maxConcurrentUsers() != 1 {
+		close(host.userRelease)
+		t.Fatalf("overlapping poll started upstream work: token=%d user=%d max concurrent users=%d", tokenRequests, userRequests, host.maxConcurrentUsers())
+	}
+
+	close(host.userRelease)
+	select {
+	case result := <-firstResult:
+		if result.err != nil || result.poll.Status != pluginapi.AuthLoginStatusSuccess || result.poll.Auth.StorageJSON == nil {
+			t.Fatalf("blocked verification completion = %#v, error=%v", result.poll, result.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked account verification did not complete")
+	}
+	_, tokenRequests, userRequests = host.counts()
+	if tokenRequests != 1 || userRequests != 1 || host.maxConcurrentUsers() != 1 {
+		t.Fatalf("verification completion repeated upstream work: token=%d user=%d max concurrent users=%d", tokenRequests, userRequests, host.maxConcurrentUsers())
+	}
+	service.oauthMu.Lock()
+	_, retained := service.oauthSession[start.State]
+	service.oauthMu.Unlock()
+	if retained {
+		t.Fatal("completed blocked verification retained the device session")
+	}
+}
+
+func TestPollLoginShutdownDuringBlockedAccountVerificationClearsState(t *testing.T) {
+	host := &oauthDeviceLifecycleHost{
+		userEntered: make(chan struct{}, 1),
+		userRelease: make(chan struct{}),
+	}
+	service := New(host)
+	start, err := service.StartLogin(context.Background(), "synthetic-callback")
+	if err != nil {
+		t.Fatalf("StartLogin: %v", err)
+	}
+	result := make(chan struct {
+		poll pluginapi.AuthLoginPollResponse
+		err  error
+	}, 1)
+	go func() {
+		poll, err := service.PollLogin(context.Background(), "synthetic-callback", start.State)
+		result <- struct {
+			poll pluginapi.AuthLoginPollResponse
+			err  error
+		}{poll: poll, err: err}
+	}()
+	select {
+	case <-host.userEntered:
+	case <-time.After(5 * time.Second):
+		close(host.userRelease)
+		t.Fatal("account verification did not reach the blocked /user request")
+	}
+
+	service.Shutdown()
+	service.oauthMu.Lock()
+	remainingSessions := len(service.oauthSession)
+	service.oauthMu.Unlock()
+	if remainingSessions != 0 {
+		close(host.userRelease)
+		t.Fatalf("Shutdown retained %d OAuth sessions", remainingSessions)
+	}
+	close(host.userRelease)
+	select {
+	case completed := <-result:
+		if completed.err != nil || completed.poll.Status != pluginapi.AuthLoginStatusError || completed.poll.Auth.StorageJSON != nil {
+			t.Fatalf("poll after shutdown = %#v, error=%v", completed.poll, completed.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked account verification did not stop after shutdown")
+	}
+	_, tokenRequests, userRequests := host.counts()
+	if tokenRequests != 1 || userRequests != 1 || host.maxConcurrentUsers() != 1 {
+		t.Fatalf("shutdown verification repeated upstream work: token=%d user=%d max concurrent users=%d", tokenRequests, userRequests, host.maxConcurrentUsers())
+	}
+	service.oauthMu.Lock()
+	remainingSessions = len(service.oauthSession)
+	service.oauthMu.Unlock()
+	if remainingSessions != 0 {
+		t.Fatalf("in-flight verification recreated %d OAuth sessions after shutdown", remainingSessions)
+	}
 }
 
 func TestPollLoginRetainsTokenUntilAccountVerificationRecovers(t *testing.T) {
