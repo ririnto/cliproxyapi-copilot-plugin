@@ -47,9 +47,9 @@ func responsesStreamToChat(ctx context.Context, model string, original, translat
 	}
 	streamState, ok := (*state).(*responsesChatStreamState)
 	if !ok {
-		claudeRequest := registry.TranslateRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, original, true)
-		if len(claudeRequest) == 0 || !json.Valid(claudeRequest) {
-			return nil, fmt.Errorf("official Chat-to-Claude stream context translation failed")
+		claudeRequest, err := translateSDKRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, original, true)
+		if err != nil {
+			return nil, err
 		}
 		streamState = &responsesChatStreamState{Request: claudeRequest, Model: model, Output: chatOpaqueStreamState{Model: model, LastSequence: -1}}
 		*state = streamState

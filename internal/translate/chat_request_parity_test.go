@@ -10,6 +10,27 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+func TestResponsesToMessagesPreservesExplicitTemperature(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, temperature := range []string{"0", "0.75", "1"} {
+			body := []byte(`{"input":[{"role":"user","content":"hello"}],"temperature":` + temperature + `}`)
+			translated, err := RequestForEndpointFrom("openai-response", "claude-haiku-5.5", body, stream, EndpointMessages)
+			if err != nil {
+				t.Fatalf("translate Responses temperature %s: %v", temperature, err)
+			}
+			if actual := gjson.GetBytes(translated, "temperature"); actual.Type != gjson.Number || actual.Raw != temperature {
+				t.Fatalf("temperature %s changed: %s", temperature, translated)
+			}
+		}
+		for _, temperature := range []string{"null", `"0"`, "-1", "2", "1e999"} {
+			body := []byte(`{"input":[{"role":"user","content":"hello"}],"temperature":` + temperature + `}`)
+			if translated, err := RequestForEndpointFrom("openai-response", "claude-haiku-5.5", body, stream, EndpointMessages); err == nil || len(translated) != 0 {
+				t.Fatalf("unsupported Messages temperature %s accepted: %s, %v", temperature, translated, err)
+			}
+		}
+	}
+}
+
 func TestChatToResponsesPreservesNativeConstraintsSearchAndToolHistory(t *testing.T) {
 	request := []byte(`{"messages":[{"role":"user","content":"look up the value"},{"role":"assistant","tool_calls":[{"id":"call/+preserve","type":"function","function":{"name":"lookup","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call/+preserve","content":"found"}],"tools":[{"type":"function","function":{"name":"lookup","description":"Find a value","parameters":{"type":"object"},"strict":false}},{"type":"function","function":{"name":"write","parameters":{"type":"object"},"strict":true}},{"type":"function","function":{"name":"summarize","parameters":{"type":"object"}}}],"response_format":{"type":"json_schema","json_schema":{"name":"answer","description":"A concise answer","strict":false,"schema":{"type":"object","properties":{"answer":{"type":"string"}}}}},"web_search_options":{"search_context_size":"low","user_location":{"type":"approximate","country":"US"}}}`)
 

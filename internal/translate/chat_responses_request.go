@@ -2,7 +2,6 @@ package translate
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -35,18 +34,9 @@ func chatRequestToResponses(model string, body []byte, stream bool) ([]byte, err
 			return nil, fmt.Errorf("remove Chat response_format before Claude request translation")
 		}
 	}
-	claudeEnvelope := registry.TranslateRequestEnvelope(context.Background(), sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.RequestEnvelope{
-		Format: sdktranslator.FormatOpenAI,
-		Model:  model,
-		Stream: stream,
-		Body:   prepared,
-	})
-	if claudeEnvelope.Err != nil {
-		return nil, fmt.Errorf("official Chat-to-Claude request translation refused the request: %w", claudeEnvelope.Err)
-	}
-	claude := claudeEnvelope.Body
-	if len(claude) == 0 || !json.Valid(claude) {
-		return nil, fmt.Errorf("official Chat-to-Claude request translation failed")
+	claude, err := translateSDKRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, prepared, stream)
+	if err != nil {
+		return nil, err
 	}
 	responses, err := claudeRequestToResponses(model, claude, stream)
 	if err != nil {
@@ -105,18 +95,9 @@ func chatRequestToClaude(model string, body []byte, stream bool) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	envelope := registry.TranslateRequestEnvelope(context.Background(), sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, sdktranslator.RequestEnvelope{
-		Format: sdktranslator.FormatOpenAI,
-		Model:  model,
-		Stream: stream,
-		Body:   prepared,
-	})
-	if envelope.Err != nil {
-		return nil, fmt.Errorf("official Chat-to-Claude request translation refused the request: %w", envelope.Err)
-	}
-	translated := envelope.Body
-	if len(translated) == 0 || !json.Valid(translated) {
-		return nil, fmt.Errorf("official Chat-to-Claude request translation failed")
+	translated, err := translateSDKRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, prepared, stream)
+	if err != nil {
+		return nil, err
 	}
 	translated, err = restoreChatTemperatureToMessages(translated, body)
 	if err != nil {
@@ -904,17 +885,9 @@ func restoreChatResponsesConstraints(responses, chat []byte, model string, strea
 			return nil, fmt.Errorf("project Chat response_format for Responses translation")
 		}
 	}
-	envelope := registry.TranslateRequestEnvelope(context.Background(), sdktranslator.FormatOpenAI, sdktranslator.FormatCodex, sdktranslator.RequestEnvelope{
-		Format: sdktranslator.FormatOpenAI,
-		Model:  model,
-		Stream: stream,
-		Body:   projection,
-	})
-	if envelope.Err != nil {
-		return nil, fmt.Errorf("official Chat-to-Codex constraint projection refused the request: %w", envelope.Err)
-	}
-	if len(envelope.Body) == 0 || !json.Valid(envelope.Body) {
-		return nil, fmt.Errorf("official Chat-to-Codex constraint projection failed")
+	projected, err := translateSDKRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatCodex, model, projection, stream)
+	if err != nil {
+		return nil, err
 	}
 	updated := responses
 	if hasResponseFormat {
@@ -922,7 +895,7 @@ func restoreChatResponsesConstraints(responses, chat []byte, model string, strea
 		if stringValue(format["type"]) == "json_object" {
 			updated, err = sjson.SetRawBytes(updated, "text.format", []byte(`{"type":"json_object"}`))
 		} else {
-			textFormat := gjson.GetBytes(envelope.Body, "text.format")
+			textFormat := gjson.GetBytes(projected, "text.format")
 			if !textFormat.Exists() || !textFormat.IsObject() {
 				return nil, fmt.Errorf("Chat response_format was not preserved by Responses constraint mapping")
 			}
@@ -944,7 +917,7 @@ func restoreChatResponsesConstraints(responses, chat []byte, model string, strea
 		}
 	}
 	if len(toolList) > 0 {
-		mappedTools := gjson.GetBytes(envelope.Body, "tools").Array()
+		mappedTools := gjson.GetBytes(projected, "tools").Array()
 		responsesTools := gjson.GetBytes(updated, "tools").Array()
 		if len(mappedTools) != len(toolList) || len(responsesTools) < len(toolList) {
 			return nil, fmt.Errorf("Chat function constraints were not preserved by Responses translation")
