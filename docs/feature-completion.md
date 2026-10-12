@@ -115,9 +115,10 @@ The [official Codex release API](https://api.github.com/repos/openai/codex/relea
 
 The initial Docker reservation request asks for exclusive runtime ownership, daemon identity, a quiet receipt and physical resource enforcement.
 The reviewed Docker execution request supplies exact build/native/probe/cleanup commands and a controller that passed independent Sol/high review and offline deadline checks.
-Its 153-file snapshot was checked against clean tracked candidate 9957e66; this establishes source provenance, not Docker execution or current-head acceptance.
+The earlier 153-file snapshot at 9957e66 is historical. The current proposal was resealed from all 407 tracked Git blobs at f897ef9, including current source and executable modes; native seeds/selector and the current CI artifact were verified.
+Independent Sol/high review found the current proposal conditionally clear and the controller/resource contract unchanged; offline validation passed. This establishes proposal/source provenance, not Docker execution.
 It remains unarmed until the Orchestrator supplies a bound exclusive lease, enforced resource/storage budgets and independent cancellation/cleanup guard.
-Execution against a newer source requires resealing; the earlier reservation proposal cannot authorize an unsealed replacement.
+The current sealed request was sent to the Orchestrator. Execution against another source requires resealing; earlier requests cannot authorize an unsealed replacement.
 The proposal uses task-specific names, empty authentication, loopback publishing, an isolated internal network, pinned images and bounded execution/cleanup.
 No Docker command or API access has occurred during this audit.
 Provider access is explicitly denied. The Docker lease and additional capability/resource contracts remain external inputs; elapsed time supplies neither permission nor capability evidence.
@@ -130,7 +131,6 @@ Both public CI test/package lanes passed; the downloaded Linux package checksum,
 The selected dependency graph is unchanged from the audit vulnerability scan: zero called/imported vulnerable packages; the unimported module-only advisory remains disclosed.
 Task-owned current-source authless startup returned models HTTP 200 with empty auth and external network denied; teardown reaped the host.
 No target-provider inference, local Docker execution, release workflow or live deployment ran.
-
 
 Independent documentation and source audits ran in separate worktrees.
 Post-opening code/approval reviews use Sol/high; publication exposure scans are separate.
