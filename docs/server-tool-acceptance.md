@@ -256,11 +256,14 @@ Native Messages declarations retain their original behavior.
 Ordinary client functions with server-tool names retain their client execution semantics.
 
 Incoming Claude `server_tool_use` history cannot use the ordinary function-call adapter.
-The current request adapter rejects that history instead of changing who executes the tool.
-CPA's existing Claude response-to-Responses web-search conversion remains available through the built-in registry.
-It preserves actual paired search results and replay tokens when present.
-The earlier GPT capture lacks full result entries; the later full-result capture permits testing the actual response shape, but lossless Messages conversion and continuation still require their own evidence.
-These guards do not establish cross-format server-tool support.
+[PR #15](https://github.com/ririnto/cpa-copilot-bridge/pull/15) adds completed Claude-compatible hosted-search history from Responses to destination-native Messages, preserving tool ownership and complete history for supported shapes.
+Native Claude `server_tool_use` input targeting Responses or Chat remains rejected; the replay support does not reverse that conversion direction.
+The request adapter also rejects unsupported Bash history, incomplete search pairing and opaque replay state that cannot be represented without invention.
+CPA's built-in response conversion preserves actual paired search results and replay tokens when present.
+Offline/native regression checks establish the supported completed-search conversion and zero-dispatch rejection; they do not establish a fresh original-client provider conversion pass or general cross-format hosted-tool parity.
+The earlier GPT capture lacks full result entries; the later full-result capture permits testing the actual response shape.
+
+The [feature completion matrix](feature-completion.md) records current implementation receipts and external acceptance limits separately from the dated live evidence in this document.
 
 The retained catalogue replay binds to the native CLI profile rather than the current plugin's token-exchange catalogue profile.
 An isolated-host rerun needs complete catalogue bytes and matching credential, origin, profile, and response-hash provenance.

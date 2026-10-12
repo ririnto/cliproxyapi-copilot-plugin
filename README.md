@@ -8,6 +8,9 @@ For an end-to-end deployment and Claude Code configuration walkthrough, see
 To add the plugin and its required paired host to an existing CLIProxyAPI installation, see
 [`docs/install-existing-deployment.md`](docs/install-existing-deployment.md).
 
+For feature-by-feature implementation, validation and external acceptance limits, see
+[`docs/feature-completion.md`](docs/feature-completion.md).
+
 GitHub Copilot subscription plugin built against the official `router-for-me/CLIProxyAPI` v8.0.23 SDK and plugin ABI version 1.
 Runtime requests require the paired maintained host selected by `go.mod`.
 The official v8.0.23 server lacks the required `host.payload.finalize` callback.
