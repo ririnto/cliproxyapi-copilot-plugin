@@ -664,11 +664,14 @@ func TestLiveOriginalCodexInterrupt(t *testing.T) {
 	if expectedVersion != "0.162.1" {
 		t.Fatal("original Codex interrupt harness requires the verified 0.162.1 app-server")
 	}
-	version, versionErr := exec.Command(os.Getenv("CPA_LIVE_CODEX_BINARY"), "--version").Output()
-	if versionErr != nil || strings.TrimSpace(string(version)) != "codex-cli "+expectedVersion {
+	var versionOutput bytes.Buffer
+	_, versionErr := runLiveClient(t, liveClientStartupTimeout, os.Getenv("CPA_LIVE_CODEX_BINARY"), []string{"--version"}, func(command *exec.Cmd) {
+		command.Stdout = &versionOutput
+	})
+	if versionErr != nil || strings.TrimSpace(versionOutput.String()) != "codex-cli "+expectedVersion {
 		t.Fatal("original Codex interrupt client does not match the declared version")
 	}
-	summary["cli_version"] = strings.TrimSpace(string(version))
+	summary["cli_version"] = strings.TrimSpace(versionOutput.String())
 	for _, name := range []string{"CPA_LIVE_CODEX_BINARY", "CPA_LIVE_CODEX_CATALOG", "CPA_LIVE_CODEX_SANDBOX", "CPA_LIVE_CODEX_INTERRUPT_DRIVER"} {
 		path := strings.TrimSpace(os.Getenv(name))
 		info, statErr := os.Lstat(path)
@@ -702,12 +705,14 @@ func TestLiveOriginalCodexInterrupt(t *testing.T) {
 	if err != nil {
 		t.Fatal("python3 is required for the original Codex app-server driver")
 	}
-	dependency := exec.Command(pythonPath, "-c", "import websockets; print(websockets.__version__)")
-	dependencyOutput, err := dependency.Output()
-	if err != nil {
+	var dependencyOutput bytes.Buffer
+	_, dependencyErr := runLiveClient(t, liveClientStartupTimeout, pythonPath, []string{"-c", "import websockets; print(websockets.__version__)"}, func(command *exec.Cmd) {
+		command.Stdout = &dependencyOutput
+	})
+	if dependencyErr != nil {
 		t.Fatal("the existing Python websockets dependency is unavailable")
 	}
-	summary["python_websockets_version"] = strings.TrimSpace(string(dependencyOutput))
+	summary["python_websockets_version"] = strings.TrimSpace(dependencyOutput.String())
 
 	stage = "captured-host-start"
 	gate, base, stopHost := startLiveCapturedHarness(t, nil, liveEndpointOverrides(nil))
@@ -752,12 +757,12 @@ func TestLiveOriginalCodexInterrupt(t *testing.T) {
 		_ = stdout.Close()
 		t.Fatal("could not create private Codex driver stderr capture")
 	}
-	command := exec.Command(pythonPath, driverPath, "--base-url", relayURL, "--output-root", artifactDir)
-	command.Dir = artifactDir
-	command.Env = append(os.Environ(), "TASK_PROXY_API_KEY="+liveCopilotClientKey)
-	command.Stdout = stdout
-	command.Stderr = stderr
-	runErr := command.Run()
+	_, runErr := runLiveClient(t, liveClientTimeout, pythonPath, []string{driverPath, "--base-url", relayURL, "--output-root", artifactDir}, func(command *exec.Cmd) {
+		command.Dir = artifactDir
+		command.Env = append(os.Environ(), "TASK_PROXY_API_KEY="+liveCopilotClientKey)
+		command.Stdout = stdout
+		command.Stderr = stderr
+	})
 	_ = stdout.Sync()
 	_ = stderr.Sync()
 	_ = stdout.Close()

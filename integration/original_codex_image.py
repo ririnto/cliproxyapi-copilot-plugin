@@ -18,7 +18,10 @@ from urllib.parse import urlparse
 def wake_reader_failure(notifications, fatal, reason):
     if not fatal.done():
         fatal.set_result(reason)
-    notifications.put_nowait({'method': 'child/reader_failure', 'reason': reason})
+    try:
+        notifications.put_nowait({'method': 'child/reader_failure', 'reason': reason})
+    except asyncio.QueueFull:
+        pass
 
 
 async def read_rpc_stdout(stream, pending, notifications, fatal, record):
@@ -45,9 +48,11 @@ async def read_rpc_stderr(stream, output, notifications, fatal):
         wake_reader_failure(notifications, fatal, 'stderr_reader_' + type(error).__name__)
 
 
-async def await_rpc_reply(reply, fatal):
+async def await_rpc_reply(reply, fatal, timeout=30):
     if not fatal.done():
-        await asyncio.wait((reply, fatal), return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait((reply, fatal), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        if not done:
+            raise RuntimeError('rpc_timeout')
     if fatal.done():
         raise RuntimeError(fatal.result())
     return reply.result()
@@ -65,7 +70,7 @@ async def run(args):
     shutil.copyfile(os.environ['CPA_LIVE_CODEX_CATALOG'], catalog)
     catalog.chmod(0o600)
     binary = os.environ['CPA_LIVE_CODEX_BINARY']
-    version = subprocess.check_output([binary, '--version'], text=True).strip()
+    version = subprocess.run([binary, '--version'], text=True, capture_output=True, check=True, timeout=15).stdout.strip()
     if version != 'codex-cli ' + os.environ['CPA_LIVE_CODEX_EXPECTED_VERSION']:
         raise RuntimeError('version_mismatch')
     parsed = urlparse(args.base_url)
@@ -94,14 +99,17 @@ stream_max_retries = 0
         frames.close()
         raise
     try:
-        child = await asyncio.create_subprocess_exec('/usr/bin/sandbox-exec', '-f', os.environ['CPA_LIVE_CODEX_SANDBOX'], binary, 'app-server', '--strict-config', '--stdio', cwd=root, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=4<<20)
+        child = await asyncio.create_subprocess_exec('/usr/bin/sandbox-exec', '-f', os.environ['CPA_LIVE_CODEX_SANDBOX'], binary, 'app-server', '--strict-config', '--stdio', cwd=root, env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=not args.supervised, limit=4<<20)
     except BaseException:
         frames.close()
         stderr.close()
         raise
     pending = {}
-    queue = asyncio.Queue()
+    queue = asyncio.Queue(maxsize=64)
     fatal = asyncio.get_running_loop().create_future()
+    loop = asyncio.get_running_loop()
+    # Leave time to reap the child before the enclosing four-minute deadline.
+    operation_deadline = loop.time() + 210
     sequence = 0
     def record(direction, frame):
         frames.write(json.dumps({'direction': direction, 'frame': frame}, separators=(',', ':')) + '\n')
@@ -119,9 +127,9 @@ stream_max_retries = 0
         pending[sequence] = future
         record('driver_to_original_app_server', frame)
         child.stdin.write((json.dumps(frame) + '\n').encode())
-        await child.stdin.drain()
+        await asyncio.wait_for(child.stdin.drain(), timeout=min(args.rpc_timeout, max(0, operation_deadline - loop.time())))
         try:
-            reply = await await_rpc_reply(future, fatal)
+            reply = await await_rpc_reply(future, fatal, min(args.rpc_timeout, max(0, operation_deadline - loop.time())))
         finally:
             pending.pop(sequence, None)
             if not future.done():
@@ -135,17 +143,24 @@ stream_max_retries = 0
         frame = {'jsonrpc': '2.0', 'method': 'initialized'}
         record('driver_to_original_app_server', frame)
         child.stdin.write((json.dumps(frame) + '\n').encode())
-        await child.stdin.drain()
+        await asyncio.wait_for(child.stdin.drain(), timeout=min(args.rpc_timeout, max(0, operation_deadline - loop.time())))
         thread = await request('thread/start', {'model': 'gpt-6-luna', 'modelProvider': 'task_proxy', 'cwd': str(root), 'approvalPolicy': 'never', 'sandbox': 'read-only', 'allowProviderModelFallback': False})
         if thread.get('model') != 'gpt-6-luna':
             raise RuntimeError('thread_model_changed')
         thread_id = thread['thread']['id']
         turn = await request('turn/start', {'threadId': thread_id, 'model': 'gpt-6-luna', 'effort': 'medium', 'input': [{'type': 'text', 'text': 'Inspect the attached image. Reply exactly TOP=<top half color>;BOTTOM=<bottom half color>, using lowercase color names. Do not use tools.'}, {'type': 'image', 'url': args.image_url, 'detail': 'high'}]})
         turn_id = turn['turn']['id']
+        turn_deadline = min(operation_deadline, loop.time() + args.turn_timeout)
         while True:
             if fatal.done():
                 raise RuntimeError(fatal.result())
-            notice = await queue.get()
+            try:
+                remaining = turn_deadline - loop.time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                notice = await asyncio.wait_for(queue.get(), timeout=remaining)
+            except asyncio.TimeoutError as error:
+                raise RuntimeError('turn_timeout') from error
             if notice['method'] == 'child/reader_failure':
                 raise RuntimeError(notice['reason'])
             params = notice.get('params', {})
@@ -165,12 +180,27 @@ stream_max_retries = 0
             (root / 'summary.json').write_text(json.dumps(outcome, indent=2))
         finally:
             try:
-                if child.returncode is None:
-                    try:
+                try:
+                    if args.supervised:
+                        if child.returncode is None:
+                            child.kill()
+                    else:
                         os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(child.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    try:
+                        if args.supervised:
+                            child.kill()
+                        else:
+                            os.killpg(child.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                await child.wait()
+                    await child.wait()
+                for reader in readers:
+                    reader.cancel()
                 await asyncio.gather(*readers, return_exceptions=True)
             finally:
                 frames.close()
@@ -183,5 +213,8 @@ if __name__ == '__main__':
     parser.add_argument('--base-url', required=True)
     parser.add_argument('--output-root', required=True)
     parser.add_argument('--image-url', required=True)
+    parser.add_argument('--rpc-timeout', type=float, default=30)
+    parser.add_argument('--turn-timeout', type=float, default=180)
+    parser.add_argument('--supervised', action='store_true', help='inherit the caller process group for tree-wide timeout cleanup')
     args = parser.parse_args()
     raise SystemExit(asyncio.run(run(args)))

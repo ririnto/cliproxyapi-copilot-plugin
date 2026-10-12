@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -31,8 +30,11 @@ func TestLiveOriginalClaudeHTTPSImage(t *testing.T) {
 		t.Fatal("an existing public HTTPS image source is required")
 	}
 	binary := os.Getenv("CPA_LIVE_CLAUDE_BINARY")
-	version, err := exec.Command(binary, "--version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != os.Getenv("CPA_LIVE_CLAUDE_EXPECTED_VERSION")+" (Claude Code)" {
+	var versionOutput bytes.Buffer
+	_, versionErr := runLiveClient(t, liveClientStartupTimeout, binary, []string{"--version"}, func(command *exec.Cmd) {
+		command.Stdout = &versionOutput
+	})
+	if versionErr != nil || strings.TrimSpace(versionOutput.String()) != os.Getenv("CPA_LIVE_CLAUDE_EXPECTED_VERSION")+" (Claude Code)" {
 		t.Fatal("selected original Claude version did not match its declared version")
 	}
 	root, err := os.MkdirTemp(os.Getenv("CPA_LIVE_COPILOT_DEBUG_DIR"), "original-claude-url-image-")
@@ -48,7 +50,7 @@ func TestLiveOriginalClaudeHTTPSImage(t *testing.T) {
 			t.Error("could not remove disposable original Claude home")
 		}
 	})
-	summary := map[string]any{"claim_cell": liveOriginalClaudeURLImageKey, "cli_version": strings.TrimSpace(string(version)), "image_url": imageURL, "carrier_scope": "url_only_no_independent_mime_or_detail", "stage": "host-start", "passed": false}
+	summary := map[string]any{"claim_cell": liveOriginalClaudeURLImageKey, "cli_version": strings.TrimSpace(versionOutput.String()), "image_url": imageURL, "carrier_scope": "url_only_no_independent_mime_or_detail", "stage": "host-start", "passed": false}
 	defer func() {
 		if err := writeOriginalInterruptJSON(filepath.Join(root, "validation-summary.json"), summary); err != nil {
 			t.Error("could not retain original Claude URL validation summary")
@@ -84,15 +86,6 @@ func TestLiveOriginalClaudeHTTPSImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := []string{"--safe-mode", "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--permission-mode", "dontAsk", "--tools", "", "--model", "claude-haiku-5.5", "--effort", "medium"}
-	command := exec.Command("/usr/bin/sandbox-exec", append([]string{"-f", livePacketSandboxProfile(), binary}, args...)...)
-	command.Dir, command.Env = home, append(liveCLIEnvironment("claude", strings.TrimSuffix(relayURL, "/v1"), home), "CLAUDE_CODE_MAX_RETRIES=0")
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	defer func() {
-		if command.Process != nil {
-			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		}
-	}()
-	command.Stdin = bytes.NewReader(input)
 	stdout, stderr := &liveCLIBuffer{}, &liveCLIBuffer{}
 	stdoutFile, err := os.OpenFile(filepath.Join(root, "stdout.jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -112,12 +105,15 @@ func TestLiveOriginalClaudeHTTPSImage(t *testing.T) {
 			t.Error("could not close original Claude stderr capture")
 		}
 	}()
-	command.Stdout, command.Stderr = io.MultiWriter(stdoutFile, stdout), io.MultiWriter(stderrFile, stderr)
 	summary["stage"] = "original-client"
 	if err := writeOriginalInterruptJSON(filepath.Join(root, "validation-summary.json"), summary); err != nil {
 		t.Fatal("could not retain pre-launch original Claude URL summary")
 	}
-	runErr := command.Run()
+	_, runErr := runLiveClient(t, liveClientTimeout, "/usr/bin/sandbox-exec", append([]string{"-f", livePacketSandboxProfile(), binary}, args...), func(command *exec.Cmd) {
+		command.Dir, command.Env = home, append(liveCLIEnvironment("claude", strings.TrimSuffix(relayURL, "/v1"), home), "CLAUDE_CODE_MAX_RETRIES=0")
+		command.Stdin = bytes.NewReader(input)
+		command.Stdout, command.Stderr = io.MultiWriter(stdoutFile, stdout), io.MultiWriter(stderrFile, stderr)
+	})
 	if err := stdoutFile.Sync(); err != nil {
 		t.Fatal("could not sync original Claude stdout capture")
 	}
