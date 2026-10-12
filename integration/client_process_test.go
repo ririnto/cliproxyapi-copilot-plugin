@@ -48,7 +48,7 @@ func TestOriginalCodexDriverTimesOutAndReapsStalledAppServer(t *testing.T) {
 	if !ok {
 		t.Fatal("could not locate integration test source")
 	}
-	driver := filepath.Join(filepath.Dir(source), "..", "scripts", "original_codex_image.py")
+	driver := filepath.Join(filepath.Dir(source), "original_codex_image.py")
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestOriginalCodexDriverTimesOutDespiteUnrelatedNotifications(t *testing.T) 
 	if !ok {
 		t.Fatal("could not locate integration test source")
 	}
-	driver := filepath.Join(filepath.Dir(source), "..", "scripts", "original_codex_image.py")
+	driver := filepath.Join(filepath.Dir(source), "original_codex_image.py")
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatal(err)
