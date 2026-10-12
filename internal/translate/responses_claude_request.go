@@ -33,6 +33,7 @@ func responsesRequestToClaude(model string, body []byte, stream bool) ([]byte, e
 	toolCallsByCallID := make(map[string]responsesClaudeToolPayload)
 	toolCallsByClaudeID := make(map[string]struct{})
 	webSearchRestore := make(map[string]gjson.Result)
+	citationRestore := make(map[string]json.RawMessage)
 	if input.IsArray() {
 		for index, item := range input.Array() {
 			switch item.Get("type").String() {
@@ -108,6 +109,30 @@ func responsesRequestToClaude(model string, body []byte, stream bool) ([]byte, e
 			}
 			temporary = updated
 		}
+		markerIndex := 0
+		for itemIndex, item := range input.Array() {
+			if item.Get("type").String() != "message" || item.Get("role").String() != "assistant" {
+				continue
+			}
+			for partIndex, part := range item.Get("content").Array() {
+				annotations := part.Get("annotations")
+				if !annotations.IsArray() || len(annotations.Array()) == 0 {
+					continue
+				}
+				marker := temporaryResponsesMarker(body, "citation", markerIndex)
+				markerIndex++
+				citationRestore[marker] = json.RawMessage(annotations.Raw)
+				text, errText := temporaryCitationText(temporary, itemIndex, partIndex)
+				if errText != nil {
+					return nil, errText
+				}
+				updated, err := sjson.SetBytes(temporary, fmt.Sprintf("input.%d.content.%d.text", itemIndex, partIndex), text+marker)
+				if err != nil {
+					return nil, fmt.Errorf("prepare Responses citation for Claude translation")
+				}
+				temporary = updated
+			}
+		}
 	}
 	temporary, err := normalizeResponsesWebSearchPreviewForClaude(temporary)
 	if err != nil {
@@ -133,7 +158,7 @@ func responsesRequestToClaude(model string, body []byte, stream bool) ([]byte, e
 			return nil, fmt.Errorf("Responses tool_choice required cannot be preserved by Claude Messages without translated tools")
 		}
 	}
-	if len(reasoningRestore) == 0 && len(toolRestore) == 0 && len(webSearchRestore) == 0 {
+	if len(reasoningRestore) == 0 && len(toolRestore) == 0 && len(webSearchRestore) == 0 && len(citationRestore) == 0 {
 		return out, nil
 	}
 	reasoningCounts := make(map[string]int, len(reasoningRestore))
@@ -227,6 +252,12 @@ func responsesRequestToClaude(model string, body []byte, stream bool) ([]byte, e
 			return nil, fmt.Errorf("Responses tool identity could not be restored exactly in Claude request")
 		}
 	}
+	if len(citationRestore) > 0 {
+		out, err = restoreResponsesRequestCitations(out, citationRestore)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for id := range webSearchRestore {
 		if webSearchUseCounts[id] != 1 || webSearchResultCounts[id] != 1 {
 			return nil, fmt.Errorf("Responses web search pair could not be restored exactly in Claude request")
@@ -265,6 +296,111 @@ func normalizeResponsesWebSearchPreviewToolArray(body []byte, tools gjson.Result
 		body = updated
 	}
 	return body, nil
+}
+
+func temporaryCitationText(body []byte, itemIndex, partIndex int) (string, error) {
+	value := gjson.GetBytes(body, fmt.Sprintf("input.%d.content.%d.text", itemIndex, partIndex))
+	if value.Type != gjson.String || value.String() == "" {
+		return "", fmt.Errorf("Responses citation requires nonempty text")
+	}
+	return value.String(), nil
+}
+
+func restoreResponsesRequestCitations(body []byte, citations map[string]json.RawMessage) ([]byte, error) {
+	root, err := decodeObject(body)
+	if err != nil {
+		return nil, fmt.Errorf("decode translated Messages citations")
+	}
+	messages, ok := root["messages"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("translated Messages citations have no message list")
+	}
+	seen := make(map[string]int, len(citations))
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok || stringValue(message["role"]) != "assistant" {
+			continue
+		}
+		content, ok := message["content"].([]any)
+		if !ok {
+			continue
+		}
+		restored := make([]any, 0, len(content))
+		for _, rawBlock := range content {
+			block, ok := rawBlock.(map[string]any)
+			if !ok || stringValue(block["type"]) != "text" {
+				restored = append(restored, rawBlock)
+				continue
+			}
+			text, ok := block["text"].(string)
+			if !ok {
+				restored = append(restored, rawBlock)
+				continue
+			}
+			cursor := 0
+			matched := false
+			for cursor < len(text) {
+				marker, offset := nextCitationMarker(text[cursor:], citations)
+				if marker == "" {
+					break
+				}
+				markerStart := cursor + offset
+				if markerStart == cursor {
+					return nil, fmt.Errorf("translated Messages citation lost its text boundary")
+				}
+				segment := cloneClaudeTextBlock(block, text[cursor:markerStart])
+				restored = append(restored, segment)
+				var values []any
+				if err := json.Unmarshal(citations[marker], &values); err != nil || len(values) == 0 {
+					return nil, fmt.Errorf("decode restored Responses citations")
+				}
+				segment["citations"] = values
+				restored[len(restored)-1] = segment
+				seen[marker]++
+				cursor = markerStart + len(marker)
+				matched = true
+			}
+			if !matched {
+				restored = append(restored, rawBlock)
+				continue
+			}
+			if cursor < len(text) {
+				restored = append(restored, cloneClaudeTextBlock(block, text[cursor:]))
+			}
+		}
+		message["content"] = restored
+	}
+	for marker := range citations {
+		if seen[marker] != 1 {
+			return nil, fmt.Errorf("Responses citation could not be restored exactly in Claude request")
+		}
+	}
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, fmt.Errorf("encode translated Messages citations")
+	}
+	return encoded, nil
+}
+
+func nextCitationMarker(text string, citations map[string]json.RawMessage) (string, int) {
+	selected, selectedIndex := "", -1
+	for marker := range citations {
+		if index := strings.Index(text, marker); index >= 0 && (selectedIndex < 0 || index < selectedIndex) {
+			selected, selectedIndex = marker, index
+		}
+	}
+	return selected, selectedIndex
+}
+
+func cloneClaudeTextBlock(original map[string]any, text string) map[string]any {
+	block := make(map[string]any, len(original))
+	for key, value := range original {
+		if key != "citations" {
+			block[key] = value
+		}
+	}
+	block["text"] = text
+	return block
 }
 
 func temporaryResponsesMarker(body []byte, kind string, index int) string {

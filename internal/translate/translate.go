@@ -385,21 +385,7 @@ func stream(ctx context.Context, from, to sdktranslator.Format, model string, or
 		return claudeStreamToChat(ctx, model, original, translated, frame, state)
 	}
 	if from == sdktranslator.FormatClaude && to == sdktranslator.FormatOpenAIResponse {
-		if err := validateClaudeStreamFrame(frame); err != nil {
-			return nil, err
-		}
-		_, data, done, err := parseSSEFrame(frame)
-		if err != nil {
-			return nil, err
-		}
-		if len(data) == 0 {
-			if done {
-				return registry.TranslateStream(ctx, from, to, model, original, translated, []byte("data: [DONE]"), state), nil
-			}
-			return nil, nil
-		}
-		normalized := append([]byte("data: "), data...)
-		return registry.TranslateStream(ctx, from, to, model, original, translated, normalized, state), nil
+		return claudeStreamToResponses(ctx, model, original, translated, frame, state)
 	}
 	if from == sdktranslator.FormatOpenAI && (to == sdktranslator.FormatOpenAIResponse || to == sdktranslator.FormatClaude) {
 		if state == nil {

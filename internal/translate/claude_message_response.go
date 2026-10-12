@@ -14,6 +14,9 @@ func claudeMessageResponseToResponses(ctx context.Context, model string, origina
 	if err != nil || stringValue(root["type"]) != "message" {
 		return nil, fmt.Errorf("upstream Claude response is not a Messages response")
 	}
+	if err := validateClaudeHostedSearchMessage(root); err != nil {
+		return nil, err
+	}
 	frames, err := claudeMessageResponseEvents(root)
 	if err != nil {
 		return nil, err
@@ -32,7 +35,7 @@ func claudeMessageResponseToResponses(ctx context.Context, model string, origina
 	if len(out) == 0 || !json.Valid(out) {
 		return nil, fmt.Errorf("official Claude-to-Responses response translation failed")
 	}
-	return out, nil
+	return restoreClaudeHostedSearchResponse(root, out)
 }
 
 func claudeMessageResponseEvents(root map[string]any) ([]map[string]any, error) {
