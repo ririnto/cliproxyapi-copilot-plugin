@@ -61,10 +61,31 @@ func RequestForEndpointFrom(source, model string, body []byte, stream bool, endp
 	} else if from == sdktranslator.FormatOpenAI && to == sdktranslator.FormatClaude {
 		out, err = chatRequestToClaude(model, body, stream)
 	} else if from == sdktranslator.FormatClaude && to == sdktranslator.FormatOpenAI {
+		root, decodeErr := decodeObject(body)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decode Claude request: %w", decodeErr)
+		}
+		stopSequences, stopErr := claudeStopSequences(root)
+		if stopErr != nil {
+			return nil, stopErr
+		}
+		chatSource := body
+		if len(stopSequences) > 0 {
+			chatSource, err = sjson.DeleteBytes(body, "stop_sequences")
+			if err != nil {
+				return nil, fmt.Errorf("remove Claude stop sequences before Responses translation: %w", err)
+			}
+		}
 		var intermediate []byte
-		intermediate, err = claudeRequestToResponses(model, body, stream)
+		intermediate, err = claudeRequestToResponses(model, chatSource, stream)
 		if err == nil {
 			out, err = requestFromResponsesToChat(model, intermediate, stream)
+			if err == nil && len(stopSequences) > 0 {
+				out, err = sjson.SetBytes(out, "stop", stopSequences)
+				if err != nil {
+					return nil, fmt.Errorf("set translated Chat stop sequences: %w", err)
+				}
+			}
 			opaqueSource = intermediate
 		}
 	} else if from == sdktranslator.FormatOpenAIResponse && to == sdktranslator.FormatOpenAI {
