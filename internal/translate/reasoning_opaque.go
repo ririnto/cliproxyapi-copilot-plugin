@@ -61,6 +61,7 @@ type chatOpaqueStreamState struct {
 	Content      strings.Builder
 	Tools        map[int]*chatOpaqueStreamTool
 	Completed    bool
+	Failure      error
 }
 
 func encodeCopilotOpaque(raw []byte, model string, anchor copilotOpaqueAnchor) (string, error) {
