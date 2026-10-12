@@ -37,6 +37,7 @@ func validateResponsesRequestForTarget(body []byte, target sdktranslator.Format)
 	if !ok {
 		return fmt.Errorf("Responses input has an unsupported shape")
 	}
+	webSearchIDs := make(map[string]struct{})
 	for _, rawItem := range items {
 		item, okItem := rawItem.(map[string]any)
 		if !okItem {
@@ -66,6 +67,11 @@ func validateResponsesRequestForTarget(body []byte, target sdktranslator.Format)
 		case "web_search_call":
 			if target == sdktranslator.FormatClaude {
 				err = validateResponsesWebSearchCall(item)
+				id := rawStringValue(item["id"])
+				if _, exists := webSearchIDs[id]; exists {
+					err = fmt.Errorf("Responses web search history has an ambiguous item ID")
+				}
+				webSearchIDs[id] = struct{}{}
 			} else {
 				err = fmt.Errorf("Responses web search history cannot be represented by Chat Completions")
 			}
@@ -440,41 +446,61 @@ func validateResponsesReasoning(item map[string]any) error {
 }
 
 func validateResponsesWebSearchCall(item map[string]any) error {
-	if _, ok := item["id"].(string); !ok || stringValue(item["id"]) == "" {
-		return fmt.Errorf("Responses web search history has no item ID")
+	id, ok := item["id"].(string)
+	const prefix = "ws_srvtoolu_"
+	if !ok || !strings.HasPrefix(id, prefix) || len(id) == len(prefix) {
+		return fmt.Errorf("Responses web search history requires a Claude server tool item ID")
+	}
+	for _, character := range id[len(prefix):] {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_') {
+			return fmt.Errorf("Responses web search history item ID cannot be preserved by Claude Messages")
+		}
+	}
+	for field := range item {
+		switch field {
+		case "id", "type", "status", "action", "results":
+		default:
+			return fmt.Errorf("Responses web search history field %q cannot be represented by Claude Messages", field)
+		}
+	}
+	if item["status"] != "completed" {
+		return fmt.Errorf("Responses web search history requires a completed search")
 	}
 	action, ok := item["action"].(map[string]any)
-	if !ok {
+	if !ok || action["type"] != "search" {
 		return fmt.Errorf("Responses web search history has an unsupported action")
 	}
-	query := stringValue(action["query"])
-	if query == "" {
-		query = stringValue(action["url"])
-	}
-	if query == "" {
-		if queries, ok := action["queries"].([]any); ok && len(queries) > 0 {
-			query = stringValue(queries[0])
+	for field := range action {
+		if field != "type" && field != "query" {
+			return fmt.Errorf("Responses web search action field %q cannot be represented by Claude Messages", field)
 		}
 	}
-	if query == "" {
+	if query, ok := action["query"].(string); !ok || strings.TrimSpace(query) == "" {
 		return fmt.Errorf("Responses web search history has no query")
 	}
-	if results, exists := item["results"]; exists && hasMeaningfulValue(results) {
-		entries, ok := results.([]any)
-		if !ok {
-			return fmt.Errorf("Responses web search results have an unsupported shape")
+	if result, ok := item["results"].(map[string]any); ok {
+		if result["type"] != "web_search_tool_result_error" || stringValue(result["error_code"]) == "" {
+			return fmt.Errorf("Responses web search results have an unsupported error shape")
 		}
-		for _, rawEntry := range entries {
-			entry, okEntry := rawEntry.(map[string]any)
-			if !okEntry {
-				if hasMeaningfulValue(rawEntry) {
-					return fmt.Errorf("Responses web search results contain an unsupported entry")
-				}
-				continue
-			}
-			if stringValue(entry["type"]) != "web_search_tool_result_error" && stringValue(entry["encrypted_content"]) == "" {
-				return fmt.Errorf("Responses web search result lacks its replay token")
-			}
+		return nil
+	}
+	entries, ok := item["results"].([]any)
+	if !ok {
+		return fmt.Errorf("Responses web search results have an unsupported shape")
+	}
+	for _, rawEntry := range entries {
+		entry, ok := rawEntry.(map[string]any)
+		if !ok {
+			return fmt.Errorf("Responses web search results contain an unsupported entry")
+		}
+		if entry["type"] == "web_search_tool_result_error" && stringValue(entry["error_code"]) != "" {
+			continue
+		}
+		if entry["type"] != "web_search_result" || stringValue(entry["url"]) == "" {
+			return fmt.Errorf("Responses web search results contain an unsupported entry")
+		}
+		if stringValue(entry["encrypted_content"]) == "" {
+			return fmt.Errorf("Responses web search result lacks its replay token")
 		}
 	}
 	return nil
