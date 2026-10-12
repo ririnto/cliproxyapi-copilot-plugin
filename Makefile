@@ -51,13 +51,14 @@ define PREPARE_NATIVE_HOST_CONTAINER
 	set -- "$$@" \
 		-v "$$REPO_DIR:/src" \
 		-w /src \
-		"$$GO_IMAGE" scripts/prepare-native-host.sh; \
+		"$$GO_IMAGE" integration/prepare-native-host.sh; \
 	docker "$$@"
 endef
 
 test:
 	go test ./...
-	python3 -m unittest discover -s scripts -p 'test_*.py'
+	python3 -m unittest discover -s packaging -p 'test_*.py'
+	python3 -m unittest discover -s integration -p 'test_*.py'
 
 build:
 	mkdir -p $(PLUGIN_DIR) $(CACHE_DIR)/go-build $(CACHE_DIR)/go-mod $(CACHE_DIR)/home
@@ -76,7 +77,7 @@ build-local:
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath -ldflags "$(VERSION_LDFLAG)" -buildmode=c-shared -o $(PLUGIN_SO) ./cmd/cliproxyapi-copilot
 
 package: build
-	scripts/package-release.sh "$(VERSION)"
+	packaging/package-release.sh "$(VERSION)"
 
 prepare-runtime-host:
 	$(call PREPARE_NATIVE_HOST_CONTAINER,validate)
@@ -87,11 +88,11 @@ ifeq ($(shell uname -s),Linux)
 test-native:
 	mkdir -p $(CACHE_DIR)/go-build $(CACHE_DIR)/go-mod $(CACHE_DIR)/home
 	$(call PREPARE_NATIVE_HOST_CONTAINER,run)
-	NATIVE_HOST_GOOS=linux NATIVE_HOST_GOARCH=amd64 NATIVE_HOST_IMAGE="$(GO_IMAGE)" scripts/test-native-host.sh
+	NATIVE_HOST_GOOS=linux NATIVE_HOST_GOARCH=amd64 NATIVE_HOST_IMAGE="$(GO_IMAGE)" integration/test-native-host.sh
 else
 test-native:
-	scripts/prepare-native-host.sh
-	NATIVE_HOST_IMAGE="$(GO_IMAGE)" scripts/test-native-host.sh
+	integration/prepare-native-host.sh
+	NATIVE_HOST_IMAGE="$(GO_IMAGE)" integration/test-native-host.sh
 endif
 
 clean:

@@ -422,7 +422,7 @@ A directly built artifact directory may also contain the generated C header.
 `native-stream-revalidation` is a distinct original CLI/interrupt attempt so frozen historical outcomes are preserved.
 The original CLI runner has no inference deadline; cleanup still stops its owned process group.
 The HTTPS-image case is opt-in with `CPA_LIVE_ORIGINAL_HTTPS_IMAGE=1` and requires a private original app-server driver, declared installed version and prepared HTTPS source.
-[The maintained original driver](../scripts/original_codex_image.py) uses only the installed app-server JSON-RPC interface.
+[The maintained original driver](../integration/original_codex_image.py) uses only the installed app-server JSON-RPC interface.
 Copy this source into the owned private execution directory with mode 0600 and set `CPA_LIVE_CODEX_IMAGE_DRIVER` to that file.
 The driver reads the declared original binary, catalogue and loopback sandbox from the existing live environment variables.
 Its acceptance checks the actual RPC input and answer, original POST route, unchanged URL/detail/model/effort, complete public and client lifecycles, terminal text/usage, and exact image colors.
