@@ -11,11 +11,15 @@ import (
 )
 
 func responsesResponseToChat(ctx context.Context, model string, original, translated, body []byte) ([]byte, error) {
+	preparedBody, expectedText, citations, err := prepareResponsesChatCitations(body)
+	if err != nil {
+		return nil, err
+	}
 	claudeRequest := registry.TranslateRequest(sdktranslator.FormatOpenAI, sdktranslator.FormatClaude, model, original, false)
 	if len(claudeRequest) == 0 || !json.Valid(claudeRequest) {
 		return nil, fmt.Errorf("official Chat-to-Claude response context translation failed")
 	}
-	claudeResponse, err := responsesResponseToClaude(model, body)
+	claudeResponse, err := responsesResponseToClaude(model, preparedBody)
 	if err != nil {
 		return nil, err
 	}
@@ -28,23 +32,22 @@ func responsesResponseToChat(ctx context.Context, model string, original, transl
 		return nil, err
 	}
 	items := responsesOpaqueItems(body)
-	if len(items) == 0 {
-		return chatResponse, nil
+	if len(items) > 0 {
+		choices := gjson.GetBytes(chatResponse, "choices")
+		if !choices.IsArray() || len(choices.Array()) != 1 {
+			return nil, fmt.Errorf("Responses reasoning cannot be anchored to one Chat choice")
+		}
+		message := choices.Array()[0].Get("message")
+		carrier, err := encodeCopilotOpaque(rawJSONArray(items), model, copilotAnchorForMessage(message, original))
+		if err != nil {
+			return nil, err
+		}
+		chatResponse, err = sjson.SetBytes(chatResponse, "choices.0.message.reasoning_opaque", carrier)
+		if err != nil {
+			return nil, fmt.Errorf("preserve Responses reasoning in Chat response")
+		}
 	}
-	choices := gjson.GetBytes(chatResponse, "choices")
-	if !choices.IsArray() || len(choices.Array()) != 1 {
-		return nil, fmt.Errorf("Responses reasoning cannot be anchored to one Chat choice")
-	}
-	message := choices.Array()[0].Get("message")
-	carrier, err := encodeCopilotOpaque(rawJSONArray(items), model, copilotAnchorForMessage(message, original))
-	if err != nil {
-		return nil, err
-	}
-	chatResponse, err = sjson.SetBytes(chatResponse, "choices.0.message.reasoning_opaque", carrier)
-	if err != nil {
-		return nil, fmt.Errorf("preserve Responses reasoning in Chat response")
-	}
-	return chatResponse, nil
+	return restoreResponsesChatCitations(chatResponse, expectedText, citations)
 }
 
 func restoreClaudeToolIDsToChat(body []byte) ([]byte, error) {

@@ -374,7 +374,19 @@ func validateResponsesAnnotations(part map[string]any, target sdktranslator.Form
 		return nil
 	}
 	if target != sdktranslator.FormatClaude {
-		return fmt.Errorf("Responses annotations cannot be represented by the selected endpoint")
+		if target != sdktranslator.FormatOpenAI {
+			return fmt.Errorf("Responses annotations cannot be represented by the selected endpoint")
+		}
+		annotations, ok := value.([]any)
+		if !ok {
+			return fmt.Errorf("Responses annotations have an unsupported shape")
+		}
+		for _, annotation := range annotations {
+			if _, err := responsesURLCitation(annotation); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	annotations, ok := value.([]any)
 	if !ok {
@@ -712,7 +724,7 @@ func validateResponsesOutputForChat(root map[string]any) error {
 		var err error
 		switch typ {
 		case "message":
-			err = validateClaudeResponseMessage(item)
+			err = validateResponsesOutputMessage(item, sdktranslator.FormatOpenAI)
 		case "reasoning":
 			err = validateResponsesReasoning(item)
 		case "function_call":
@@ -757,7 +769,10 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 		return validateResponsesOutputForChat(root)
 	}
 	validatePart := func(part map[string]any) error {
-		return validateClaudeResponseMessage(map[string]any{"content": []any{part}})
+		if target == sdktranslator.FormatOpenAI && hasMeaningfulValue(part["annotations"]) {
+			return fmt.Errorf("Responses URL citations are unsupported in Chat streaming")
+		}
+		return validateResponsesOutputMessage(map[string]any{"content": []any{part}}, target)
 	}
 	switch event {
 	case "response.output_item.added", "response.output_item.done":
@@ -794,6 +809,9 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 	case "response.output_text.annotation.added":
 		if target == sdktranslator.FormatClaude {
 			return validateClaudeCitation(payload["annotation"])
+		}
+		if target == sdktranslator.FormatOpenAI {
+			return fmt.Errorf("Responses URL citations are unsupported in Chat streaming")
 		}
 	case "response.created", "response.in_progress", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta", "response.failed", "error", "":
 	default:
@@ -894,6 +912,10 @@ func validateClaudeStreamFrame(frame []byte) error {
 }
 
 func validateClaudeResponseMessage(item map[string]any) error {
+	return validateResponsesOutputMessage(item, sdktranslator.FormatClaude)
+}
+
+func validateResponsesOutputMessage(item map[string]any, target sdktranslator.Format) error {
 	content := item["content"]
 	if content == nil || !hasMeaningfulValue(content) {
 		return nil
@@ -931,7 +953,7 @@ func validateClaudeResponseMessage(item map[string]any) error {
 			if typ != "output_text" && typ != "text" || rawStringValue(text) == "" {
 				return fmt.Errorf("Responses citations require nonempty text output")
 			}
-			if err := validateResponsesAnnotations(part, sdktranslator.FormatClaude); err != nil {
+			if err := validateResponsesAnnotations(part, target); err != nil {
 				return err
 			}
 		}

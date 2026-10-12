@@ -412,7 +412,7 @@ func responsesResponseToClaude(model string, body []byte) ([]byte, error) {
 				}
 				switch stringValue(part["type"]) {
 				case "output_text", "text", "refusal":
-					block := map[string]any{"type": "text", "text": firstString(part, "text", "refusal")}
+					block := map[string]any{"type": "text", "text": firstRawString(part, "text", "refusal")}
 					if annotations, exists := part["annotations"]; exists && hasMeaningfulValue(annotations) {
 						block["citations"] = annotations
 					}
