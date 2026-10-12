@@ -134,6 +134,7 @@ func claudeRequestToResponses(model string, body []byte, stream bool) ([]byte, e
 	if systemMessage != nil {
 		input = append(input, systemMessage)
 	}
+	hostedSearchIDs := make(map[string]struct{})
 	for _, rawMessage := range messages {
 		message, okMessage := rawMessage.(map[string]any)
 		if !okMessage {
@@ -195,7 +196,8 @@ func claudeRequestToResponses(model string, body []byte, stream bool) ([]byte, e
 			})
 			pending = nil
 		}
-		for _, part := range parts {
+		for partIndex := 0; partIndex < len(parts); partIndex++ {
+			part := parts[partIndex]
 			partType := stringValue(part["type"])
 			switch partType {
 			case "text":
@@ -206,6 +208,15 @@ func claudeRequestToResponses(model string, body []byte, stream bool) ([]byte, e
 				item := map[string]any{"type": contentType, "text": rawStringValue(part["text"])}
 				if cacheControl, exists := part["cache_control"]; exists {
 					item["cache_control"] = cacheControl
+				}
+				if citations, exists := part["citations"]; exists && hasMeaningfulValue(citations) {
+					if role != "assistant" || rawStringValue(part["text"]) == "" {
+						return nil, fmt.Errorf("Claude citations require nonempty assistant text")
+					}
+					if err := validateClaudeCitations(citations); err != nil {
+						return nil, err
+					}
+					item["annotations"] = citations
 				}
 				pending = append(pending, item)
 			case "image":
@@ -240,7 +251,32 @@ func claudeRequestToResponses(model string, body []byte, stream bool) ([]byte, e
 					})
 				}
 			case "server_tool_use":
-				return nil, fmt.Errorf("Claude server_tool_use history cannot be represented by the current Copilot cross-format request adapter")
+				if role != "assistant" || partIndex+1 >= len(parts) {
+					return nil, fmt.Errorf("Claude server_tool_use web search call has no adjacent result")
+				}
+				id, query, errUse := validateClaudeHostedSearchUse(part)
+				if errUse != nil {
+					return nil, errUse
+				}
+				if _, exists := hostedSearchIDs[id]; exists {
+					return nil, fmt.Errorf("Claude web search history has a duplicate call ID")
+				}
+				results, errResult := validateClaudeHostedSearchResult(parts[partIndex+1], id)
+				if errResult != nil {
+					return nil, errResult
+				}
+				flushMessage()
+				input = append(input, map[string]any{
+					"id":      "ws_" + id,
+					"type":    "web_search_call",
+					"status":  "completed",
+					"action":  map[string]any{"type": "search", "query": query},
+					"results": results,
+				})
+				hostedSearchIDs[id] = struct{}{}
+				partIndex++
+			case "web_search_tool_result":
+				return nil, fmt.Errorf("Claude web search result has no adjacent call")
 			case "tool_use":
 				flushMessage()
 				toolInput, okInput := part["input"].(map[string]any)
@@ -376,7 +412,11 @@ func responsesResponseToClaude(model string, body []byte) ([]byte, error) {
 				}
 				switch stringValue(part["type"]) {
 				case "output_text", "text", "refusal":
-					content = append(content, map[string]any{"type": "text", "text": firstString(part, "text", "refusal")})
+					block := map[string]any{"type": "text", "text": firstString(part, "text", "refusal")}
+					if annotations, exists := part["annotations"]; exists && hasMeaningfulValue(annotations) {
+						block["citations"] = annotations
+					}
+					content = append(content, block)
 				}
 			}
 		case "reasoning":
@@ -426,6 +466,22 @@ func responsesResponseToClaude(model string, body []byte) ([]byte, error) {
 				"input": input,
 			})
 			hasToolUse = true
+		case "web_search_call":
+			id := strings.TrimPrefix(rawStringValue(item["id"]), "ws_")
+			query := rawStringValue(objectValue(item["action"])["query"])
+			content = append(content,
+				map[string]any{
+					"type":  "server_tool_use",
+					"id":    id,
+					"name":  "web_search",
+					"input": map[string]any{"query": query},
+				},
+				map[string]any{
+					"type":        "web_search_tool_result",
+					"tool_use_id": id,
+					"content":     item["results"],
+				},
+			)
 		}
 	}
 	stopReason := responsesStopReason(root, hasToolUse)
