@@ -24,10 +24,10 @@ func responsesURLCitation(value any) (responsesChatCitation, error) {
 		return responsesChatCitation{}, fmt.Errorf("Responses URL citation has an unsupported shape")
 	}
 	if err := rejectFields(annotation, "type", "start_index", "end_index", "title", "url"); err != nil {
-		return responsesChatCitation{}, fmt.Errorf("Responses annotation has an unsupported field")
+		return responsesChatCitation{}, fmt.Errorf("Responses annotations have an unsupported field")
 	}
 	if stringValue(annotation["type"]) != "url_citation" {
-		return responsesChatCitation{}, fmt.Errorf("unsupported Responses annotation type %q", stringValue(annotation["type"]))
+		return responsesChatCitation{}, fmt.Errorf("unsupported Responses annotations type %q", stringValue(annotation["type"]))
 	}
 	start, startOK := annotation["start_index"].(json.Number)
 	end, endOK := annotation["end_index"].(json.Number)

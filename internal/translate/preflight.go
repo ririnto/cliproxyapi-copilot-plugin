@@ -750,13 +750,13 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 		event = stringValue(payload["type"])
 	}
 	if target == sdktranslator.FormatOpenAI {
+		if err := validateResponsesOutputForChat(objectValue(payload["response"])); err != nil {
+			return err
+		}
 		for _, rawItem := range arrayValue(objectValue(payload["response"])["output"]) {
 			if err := rejectResponsesChatStreamCitations(objectValue(rawItem)); err != nil {
 				return err
 			}
-		}
-		if err := validateResponsesOutputForChat(objectValue(payload["response"])); err != nil {
-			return err
 		}
 		if strings.HasPrefix(event, "response.web_search_call.") {
 			return fmt.Errorf("Responses web_search_call stream events cannot be represented by Chat")
@@ -811,6 +811,9 @@ func validateResponsesStreamFrame(frame []byte, target sdktranslator.Format) err
 		}
 		return validateResponsesOutputForChat(response)
 	case "response.output_text.annotation.added":
+		if !hasMeaningfulValue(payload["annotation"]) {
+			return nil
+		}
 		if target == sdktranslator.FormatClaude {
 			return validateClaudeCitation(payload["annotation"])
 		}
