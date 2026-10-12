@@ -161,8 +161,8 @@ Failed native runs preserve their temporary request and response logs; set
 To test a prebuilt plugin for the local platform, prepare the host and test executable before running the fixtures.
 
 ```sh
-scripts/prepare-native-host.sh
-scripts/test-native-host.sh
+integration/prepare-native-host.sh
+integration/test-native-host.sh
 ```
 
 macOS requires `sandbox-exec` to run the prepared fixtures with only loopback networking and an isolated child environment.
