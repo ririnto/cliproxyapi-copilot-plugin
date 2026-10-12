@@ -78,7 +78,7 @@ func TestOuterTimeoutKillsSupervisedOriginalCodexProcessTree(t *testing.T) {
 	started := filepath.Join(root, "app-server-started")
 	marker := filepath.Join(root, "late-descendant-marker")
 	fakeBinary := filepath.Join(root, "fake-codex")
-	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.0.1'; exit 0; fi\ntouch '" + started + "'\n(sleep 2.5; touch '" + marker + "') &\nsleep 30\n"
+	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.0.1'; exit 0; fi\n(touch '" + started + "'; sleep 2.5; touch '" + marker + "') &\nsleep 30\n"
 	if err := os.WriteFile(fakeBinary, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,8 @@ func TestOuterTimeoutKillsSupervisedOriginalCodexProcessTree(t *testing.T) {
 		case err := <-result:
 			t.Fatalf("outer timeout fired before app-server started: %v, stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 		case <-deadline:
-			t.Fatalf("app-server did not start, stdout=%q stderr=%q", stdout.String(), stderr.String())
+			err := <-result
+			t.Fatalf("app-server descendant did not start: %v, stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
