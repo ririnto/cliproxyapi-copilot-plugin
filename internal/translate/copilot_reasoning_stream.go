@@ -62,6 +62,11 @@ func (r *CopilotReplay) chatStream(ctx context.Context, destination, model strin
 		if err != nil || root["error"] != nil {
 			return nil, ErrCopilotReasoning
 		}
+		if destination != "openai" {
+			if err := validateChatAnnotations(destination, root); err != nil {
+				return nil, err
+			}
+		}
 		choices, _ := root["choices"].([]any)
 		for _, raw := range choices {
 			choice := objectValue(raw)

@@ -97,6 +97,9 @@ func request(from, to sdktranslator.Format, model string, body []byte, stream bo
 		if err := validateRequestAttachments(from.String(), to.String(), body); err != nil {
 			return nil, err
 		}
+		if err := validateRequestState(from.String(), to.String(), body); err != nil {
+			return nil, err
+		}
 	}
 	if from == sdktranslator.FormatClaude && to == sdktranslator.FormatOpenAIResponse {
 		return claudeRequestToResponses(model, body, stream)
@@ -124,6 +127,11 @@ func response(ctx context.Context, from, to sdktranslator.Format, model string, 
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("response body is not valid JSON")
 	}
+	if from != to {
+		if err := validateResponseState(from.String(), to.String(), body); err != nil {
+			return nil, err
+		}
+	}
 	if from == sdktranslator.FormatOpenAIResponse && to == sdktranslator.FormatClaude {
 		return responsesResponseToClaude(model, body)
 	} else if from != to && !registry.HasNonStreamResponseTransformer(to, from) {
@@ -148,6 +156,11 @@ func response(ctx context.Context, from, to sdktranslator.Format, model string, 
 }
 
 func stream(ctx context.Context, from, to sdktranslator.Format, model string, original, translated, frame []byte, state *any) ([][]byte, error) {
+	if from != to {
+		if err := validateStreamState(from.String(), to.String(), frame); err != nil {
+			return nil, err
+		}
+	}
 	if from == sdktranslator.FormatOpenAIResponse && to == sdktranslator.FormatClaude {
 		return responsesStreamToClaude(model, frame, state)
 	} else if from != to && !registry.HasStreamResponseTransformer(to, from) {
