@@ -1,9 +1,20 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/arthur-sommer-etc/cliproxyapi-copilot-plugin/internal/translate"
 )
+
+func requestTranslationError(err error) error {
+	code := "translation_error"
+	if errors.Is(err, translate.ErrAttachmentConversion) {
+		code = "unsupported_attachment"
+	}
+	return statusError(code, err.Error(), http.StatusUnprocessableEntity)
+}
 
 type StatusError struct {
 	Code       string
