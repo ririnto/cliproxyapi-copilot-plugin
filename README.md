@@ -67,8 +67,8 @@ Model discovery and inference therefore use the recognized VS Code Copilot integ
 
 ## Build and test
 
-Requirements: Docker with Compose v2 and Go 1.26.9 or later for `make test`.
-The module recommends Go 1.27.2, and the production plugin build runs inside `golang:1.27.2-bookworm`, matching the Debian Bookworm runtime used by the official image.
+Requirements: Docker with Compose v2 and Go 1.27.2 or later for `make test`.
+The module and production plugin build use Go 1.27.2, matching the Debian Bookworm runtime used by the official image.
 
 ```sh
 make test

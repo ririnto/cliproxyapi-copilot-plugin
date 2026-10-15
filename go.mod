@@ -1,8 +1,6 @@
 module github.com/arthur-sommer-etc/cliproxyapi-copilot-plugin
 
-go 1.26.9
-
-toolchain go1.27.2
+go 1.27.2
 
 require (
 	github.com/router-for-me/CLIProxyAPI/v7 v7.3.20
