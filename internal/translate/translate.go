@@ -216,8 +216,8 @@ func endpointFormat(endpoint string) (sdktranslator.Format, error) {
 }
 
 func setModelAndStream(body []byte, model string, streamEnabled bool) ([]byte, error) {
-	var value map[string]any
-	if errUnmarshal := json.Unmarshal(body, &value); errUnmarshal != nil {
+	value, errUnmarshal := decodeObject(body)
+	if errUnmarshal != nil {
 		return nil, fmt.Errorf("decode translated request: %w", errUnmarshal)
 	}
 	value["model"] = model
