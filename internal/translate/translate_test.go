@@ -21,7 +21,7 @@ func TestClaudeRequestToResponsesPreservesCoreContent(t *testing.T) {
 				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YWJj"}}
 			]},
 			{"role":"assistant","content":[
-				{"type":"thinking","thinking":"inspect first","signature":"sig"},
+				{"type":"thinking","thinking":"inspect first"},
 				{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"x"}}
 			]},
 			{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"found"}]}
