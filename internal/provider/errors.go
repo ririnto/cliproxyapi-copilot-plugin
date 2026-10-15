@@ -12,6 +12,8 @@ func requestTranslationError(err error) error {
 	code := "translation_error"
 	if errors.Is(err, translate.ErrAttachmentConversion) {
 		code = "unsupported_attachment"
+	} else if errors.Is(err, translate.ErrProviderStateConversion) {
+		code = "unsupported_provider_state"
 	}
 	return statusError(code, err.Error(), http.StatusUnprocessableEntity)
 }
