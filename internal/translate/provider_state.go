@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // ErrProviderStateConversion identifies state without a compatible target representation.
@@ -49,7 +48,7 @@ func validateRequestState(source, destination string, body []byte) error {
 			}
 		}
 		for _, raw := range arrayValue(root["messages"]) {
-			if err := validateClaudeState(source, destination, objectValue(raw)["content"], true); err != nil {
+			if err := validateClaudeState(source, destination, objectValue(raw)["content"]); err != nil {
 				return err
 			}
 		}
@@ -68,7 +67,7 @@ func validateRequestState(source, destination string, body []byte) error {
 	return nil
 }
 
-func validateClaudeState(source, destination string, content any, request bool) error {
+func validateClaudeState(source, destination string, content any) error {
 	for _, part := range claudeContentParts(content) {
 		kind := stringValue(part["type"])
 		field := "type"
@@ -79,15 +78,18 @@ func validateClaudeState(source, destination string, content any, request bool) 
 			field = "citations"
 		case "thinking":
 			signature := rawStringValue(part["signature"])
-			reject = signature != "" && !(request && destination == "openai" && strings.HasPrefix(signature, copilotReplayPrefix))
+			reject = signature != ""
 			field = "signature"
 		case "tool_use":
-			_, reject = part["caller"]
+			if caller, exists := part["caller"]; exists {
+				value := objectValue(caller)
+				reject = len(value) != 1 || stringValue(value["type"]) != "direct"
+			}
 			field = "caller"
 		case "tool_result":
 			if part["is_error"] == true {
 				reject, field = true, "is_error"
-			} else if err := validateClaudeState(source, destination, part["content"], request); err != nil {
+			} else if err := validateClaudeState(source, destination, part["content"]); err != nil {
 				return err
 			}
 		default:
@@ -120,7 +122,7 @@ func validateResponsesState(source, destination string, item map[string]any, req
 		reject = !request
 	case "reasoning":
 		signature := rawStringValue(item["encrypted_content"])
-		reject = signature != "" && !(request && destination == "openai" && strings.HasPrefix(signature, copilotReplayPrefix))
+		reject = signature != ""
 		field = "encrypted_content"
 	default:
 		reject = true
@@ -132,12 +134,15 @@ func validateResponsesState(source, destination string, item map[string]any, req
 }
 
 func validateResponseState(source, destination string, body []byte) error {
-	if source != "claude" && source != "openai-response" {
+	if source != "claude" && source != "openai-response" && source != "openai" {
 		return nil
 	}
 	root, err := decodeObject(body)
 	if err != nil {
 		return err
+	}
+	if source == "openai" {
+		return validateChatAnnotations(destination, root)
 	}
 	if source == "claude" {
 		if stringValue(root["stop_reason"]) == "pause_turn" {
@@ -146,7 +151,7 @@ func validateResponseState(source, destination string, body []byte) error {
 		if root["container"] != nil {
 			return &ProviderStateConversionError{Source: source, Destination: destination, Kind: "response", Field: "container"}
 		}
-		return validateClaudeState(source, destination, root["content"], false)
+		return validateClaudeState(source, destination, root["content"])
 	}
 	for _, raw := range arrayValue(root["output"]) {
 		if err := validateResponsesState(source, destination, objectValue(raw), false); err != nil {
@@ -157,7 +162,7 @@ func validateResponseState(source, destination string, body []byte) error {
 }
 
 func validateStreamState(source, destination string, frame []byte) error {
-	if source != "claude" && source != "openai-response" {
+	if source != "claude" && source != "openai-response" && source != "openai" {
 		return nil
 	}
 	_, data, done, err := parseSSEFrame(frame)
@@ -168,11 +173,17 @@ func validateStreamState(source, destination string, frame []byte) error {
 	if err != nil {
 		return err
 	}
+	if source == "openai" {
+		return validateChatAnnotations(destination, root)
+	}
 	if source == "claude" {
 		if block, ok := root["content_block"]; ok {
-			return validateClaudeState(source, destination, []any{block}, false)
+			return validateClaudeState(source, destination, []any{block})
 		}
 		delta := objectValue(root["delta"])
+		if delta["container"] != nil {
+			return &ProviderStateConversionError{Source: source, Destination: destination, Kind: "response", Field: "container"}
+		}
 		if stringValue(delta["type"]) == "signature_delta" {
 			return &ProviderStateConversionError{Source: source, Destination: destination, Kind: "thinking", Field: "signature"}
 		}
@@ -204,6 +215,18 @@ func validateStreamState(source, destination string, frame []byte) error {
 			return err
 		}
 		return validateResponseState(source, destination, body)
+	}
+	return nil
+}
+
+func validateChatAnnotations(destination string, root map[string]any) error {
+	for _, raw := range arrayValue(root["choices"]) {
+		choice := objectValue(raw)
+		for _, field := range []string{"message", "delta"} {
+			if len(arrayValue(objectValue(choice[field])["annotations"])) > 0 {
+				return &ProviderStateConversionError{Source: "openai", Destination: destination, Kind: field, Field: "annotations"}
+			}
+		}
 	}
 	return nil
 }

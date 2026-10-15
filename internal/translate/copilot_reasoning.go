@@ -50,14 +50,7 @@ func (r *CopilotReplay) Request(source, model string, body []byte, stream bool, 
 	if err != nil {
 		return nil, err
 	}
-	out, err := RequestForEndpointFrom(source, model, body, stream, endpoint)
-	if err != nil || len(carriers) == 0 {
-		return out, err
-	}
-	chat, err := decodeObject(out)
-	if err != nil {
-		return nil, err
-	}
+	values := make([]copilotReplayValue, 0, len(carriers))
 	for _, carrier := range carriers {
 		value, err := r.unseal(carrier.signature)
 		if err != nil {
@@ -66,6 +59,24 @@ func (r *CopilotReplay) Request(source, model string, body []byte, stream bool, 
 		if rawStringValue(value.Message["reasoning_text"]) != carrier.text {
 			return nil, ErrCopilotReasoning
 		}
+		values = append(values, value)
+		delete(carrier.block, carrier.field)
+	}
+	if len(carriers) > 0 {
+		body, err = json.Marshal(root)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out, err := RequestForEndpointFrom(source, model, body, stream, endpoint)
+	if err != nil || len(carriers) == 0 {
+		return out, err
+	}
+	chat, err := decodeObject(out)
+	if err != nil {
+		return nil, err
+	}
+	for _, value := range values {
 		messages, _ := chat["messages"].([]any)
 		groups := groupChatMessages(messages)
 		var prefix []any
@@ -101,11 +112,13 @@ func (r *CopilotReplay) Request(source, model string, body []byte, stream bool, 
 type requestReplayCarrier struct {
 	signature string
 	text      string
+	block     map[string]any
+	field     string
 }
 
 func requestReplayCarriers(source string, root map[string]any, endpoint string) ([]requestReplayCarrier, error) {
 	var carriers []requestReplayCarrier
-	accept := func(signature, text string) error {
+	accept := func(signature, text string, block map[string]any, field string) error {
 		if endpoint != EndpointChatCompletions || !strings.HasPrefix(signature, copilotReplayPrefix) {
 			return ErrCopilotReasoning
 		}
@@ -114,7 +127,7 @@ func requestReplayCarriers(source string, root map[string]any, endpoint string) 
 				return ErrCopilotReasoning
 			}
 		}
-		carriers = append(carriers, requestReplayCarrier{signature: signature, text: text})
+		carriers = append(carriers, requestReplayCarrier{signature: signature, text: text, block: block, field: field})
 		return nil
 	}
 	switch source {
@@ -128,11 +141,18 @@ func requestReplayCarriers(source string, root map[string]any, endpoint string) 
 				kind := stringValue(block["type"])
 				if kind == "thinking" || kind == "redacted_thinking" {
 					signature := rawStringValue(block["signature"])
+					if endpoint == EndpointChatCompletions && (kind == "redacted_thinking" || signature != "" && !strings.HasPrefix(signature, copilotReplayPrefix)) {
+						field := "signature"
+						if kind == "redacted_thinking" {
+							field = "type"
+						}
+						return nil, &ProviderStateConversionError{Source: source, Destination: "openai", Kind: kind, Field: field}
+					}
 					if endpoint == EndpointChatCompletions || strings.HasPrefix(signature, copilotReplayPrefix) {
 						if kind != "thinking" || stringValue(message["role"]) != "assistant" {
 							return nil, ErrCopilotReasoning
 						}
-						if err := accept(signature, rawStringValue(block["thinking"])); err != nil {
+						if err := accept(signature, rawStringValue(block["thinking"]), block, "signature"); err != nil {
 							return nil, err
 						}
 					}
@@ -145,8 +165,11 @@ func requestReplayCarriers(source string, root map[string]any, endpoint string) 
 			item := objectValue(raw)
 			if stringValue(item["type"]) == "reasoning" {
 				signature := rawStringValue(item["encrypted_content"])
+				if endpoint == EndpointChatCompletions && signature != "" && !strings.HasPrefix(signature, copilotReplayPrefix) {
+					return nil, &ProviderStateConversionError{Source: source, Destination: "openai", Kind: "reasoning", Field: "encrypted_content"}
+				}
 				if endpoint == EndpointChatCompletions || strings.HasPrefix(signature, copilotReplayPrefix) {
-					if err := accept(signature, responsesReasoningText(item)); err != nil {
+					if err := accept(signature, responsesReasoningText(item), item, "encrypted_content"); err != nil {
 						return nil, err
 					}
 				}
