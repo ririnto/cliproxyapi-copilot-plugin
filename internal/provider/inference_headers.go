@@ -7,8 +7,11 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func inferenceHeaders(token string, stream bool, endpoint string, body []byte) http.Header {
+func inferenceHeaders(token string, stream bool, endpoint string, body []byte, nativeBeta []string) http.Header {
 	headers := copilotHeaders(token, stream)
+	for _, value := range nativeBeta {
+		headers.Add("OpenAI-Beta", value)
+	}
 	root := gjson.ParseBytes(body)
 	history := root.Get("messages")
 	if endpoint == translate.EndpointResponses {
@@ -51,4 +54,15 @@ func inferenceContentFlags(endpoint string, content gjson.Result) (agent, image 
 		}
 	}
 	return agent, image
+}
+
+func nativeResponseBeta(req ExecuteRequest, source, endpoint string) []string {
+	if source != "openai-response" || endpoint != translate.EndpointResponses || len(req.OriginalRequest) == 0 {
+		return nil
+	}
+	model := gjson.GetBytes(req.OriginalRequest, "model")
+	if model.Type != gjson.String || model.String() != req.Model {
+		return nil
+	}
+	return append([]string(nil), req.Headers.Values("OpenAI-Beta")...)
 }

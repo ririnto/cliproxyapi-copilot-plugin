@@ -71,10 +71,10 @@ func TestInferenceDispatchDerivesContinuationAndVisionHeaders(t *testing.T) {
 					token := copilotTokenEntry{Token: "synthetic-initial", APIBaseURL: "https://api.example.invalid"}
 					storage := authStorage{GitHubAccessToken: "synthetic-persistent"}
 					if stream {
-						if _, _, err := service.openModelStream(context.Background(), "callback", "account", storage, token, test.endpoint, []byte(test.body)); err != nil {
+						if _, _, err := service.openModelStream(context.Background(), "callback", "account", storage, token, test.endpoint, []byte(test.body), nil); err != nil {
 							t.Fatal(err)
 						}
-					} else if _, _, err := service.doModelRequest(context.Background(), "callback", "account", storage, token, test.endpoint, []byte(test.body), false); err != nil {
+					} else if _, _, err := service.doModelRequest(context.Background(), "callback", "account", storage, token, test.endpoint, []byte(test.body), false, nil); err != nil {
 						t.Fatal(err)
 					}
 					wantAttempts := 1
