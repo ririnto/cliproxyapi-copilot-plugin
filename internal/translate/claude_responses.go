@@ -342,7 +342,7 @@ func claudeDocumentToResponses(part map[string]any) (map[string]any, error) {
 	case "url":
 		item["file_url"] = stringValue(source["url"])
 	case "text":
-		item["file_data"] = stringValue(source["data"])
+		item["file_data"] = rawStringValue(source["data"])
 	default:
 		return nil, fmt.Errorf("unsupported Claude document source type %q", stringValue(source["type"]))
 	}
