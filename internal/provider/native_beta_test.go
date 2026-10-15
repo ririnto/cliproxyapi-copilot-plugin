@@ -35,6 +35,8 @@ func TestExecutorPreservesOnlyEligibleNativeResponseBeta(t *testing.T) {
 		eligible                                  bool
 	}{
 		{"native", "responses", translate.EndpointResponses, `{"model":"test-model","input":"inspect"}`, `{}`, true},
+		{"Responses to Chat", "responses", translate.EndpointChatCompletions, `{"model":"test-model","input":"inspect"}`, `{}`, false},
+		{"Responses to Messages", "responses", translate.EndpointMessages, `{"model":"test-model","input":"inspect"}`, `{}`, false},
 		{"model transformation", "responses", translate.EndpointResponses, `{"model":"client-alias","input":"inspect"}`, `{}`, false},
 		{"missing original", "responses", translate.EndpointResponses, ``, `{"model":"test-model","input":"inspect"}`, false},
 		{"missing original model", "responses", translate.EndpointResponses, `{"input":"inspect"}`, `{}`, false},
@@ -93,7 +95,7 @@ func TestExecutorPreservesOnlyEligibleNativeResponseBeta(t *testing.T) {
 						if outgoing.Headers.Get("Authorization") != wantAuthorization {
 							t.Fatalf("provider authorization changed on attempt %d", index)
 						}
-						if outgoing.Headers.Get("X-Request-Id") == "synthetic-request" {
+						if outgoing.Headers.Get("X-Request-Id") == "" || outgoing.Headers.Get("X-Agent-Task-Id") == "" || outgoing.Headers.Get("X-Request-Id") == "synthetic-request" {
 							t.Fatal("inbound request identifier retained")
 						}
 						for _, name := range []string{"Cookie", "Copilot-Session-Token", "Anthropic-Beta"} {
