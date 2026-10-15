@@ -51,7 +51,7 @@ func (s *Service) Execute(ctx context.Context, req ExecuteRequest) (pluginapi.Ex
 	replay := reasoningReplay(req, endpoint, token.APIBaseURL, storage)
 	requestBody, errTranslate := replay.Request(sourceFormat, req.Model, originalPayload(req), false, endpoint)
 	if errTranslate != nil {
-		return pluginapi.ExecutorResponse{}, statusError("translation_error", errTranslate.Error(), http.StatusUnprocessableEntity)
+		return pluginapi.ExecutorResponse{}, requestTranslationError(errTranslate)
 	}
 	resp, token, errDo := s.doModelRequest(ctx, req.HostCallbackID, req.AuthID, storage, token, endpoint, requestBody, false)
 	if errDo != nil {
@@ -91,7 +91,7 @@ func (s *Service) ExecuteStream(ctx context.Context, req ExecuteRequest) (http.H
 	replay := reasoningReplay(req, endpoint, token.APIBaseURL, storage)
 	requestBody, errTranslate := replay.Request(sourceFormat, req.Model, originalPayload(req), true, endpoint)
 	if errTranslate != nil {
-		return nil, statusError("translation_error", errTranslate.Error(), http.StatusUnprocessableEntity)
+		return nil, requestTranslationError(errTranslate)
 	}
 	upstream, token, errOpen := s.openModelStream(ctx, req.HostCallbackID, req.AuthID, storage, token, endpoint, requestBody)
 	if errOpen != nil {

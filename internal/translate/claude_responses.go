@@ -342,11 +342,11 @@ func claudeDocumentToResponses(part map[string]any) (map[string]any, error) {
 	case "url":
 		item["file_url"] = stringValue(source["url"])
 	case "text":
-		item["file_data"] = stringValue(source["data"])
+		item["file_data"] = rawStringValue(source["data"])
 	default:
 		return nil, fmt.Errorf("unsupported Claude document source type %q", stringValue(source["type"]))
 	}
-	if title := stringValue(part["title"]); title != "" {
+	if title := rawStringValue(part["title"]); title != "" {
 		item["filename"] = title
 	}
 	return item, nil
@@ -367,6 +367,12 @@ func claudeToolResultOutput(value any) (any, error) {
 				return nil, err
 			}
 			parts = append(parts, image)
+		case "document":
+			document, err := claudeDocumentToResponses(part)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, document)
 		}
 	}
 	if len(parts) == 0 {

@@ -93,6 +93,11 @@ func request(from, to sdktranslator.Format, model string, body []byte, stream bo
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("request body is not valid JSON")
 	}
+	if from != to {
+		if err := validateRequestAttachments(from.String(), to.String(), body); err != nil {
+			return nil, err
+		}
+	}
 	if from == sdktranslator.FormatClaude && to == sdktranslator.FormatOpenAIResponse {
 		return claudeRequestToResponses(model, body, stream)
 	} else if from != to && !registry.HasRequestTransformer(from, to) {
