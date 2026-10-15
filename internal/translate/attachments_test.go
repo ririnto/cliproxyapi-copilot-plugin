@@ -95,6 +95,14 @@ func TestLossyAttachmentsReturnTypedConversionErrors(t *testing.T) {
 		{"Messages audio", "claude", EndpointResponses, `{"messages":[{"role":"user","content":[{"type":"audio","data":"AA=="}]}]}`, "audio", "type"},
 		{"tool output document URL", "openai-response", EndpointMessages, `{"input":[{"type":"function_call_output","call_id":"call_a","output":[{"type":"input_file","file_url":"https://media.example.invalid/report.pdf"}]}]}`, "input_file", "file_url"},
 		{"tool output document to Chat", "claude", EndpointChatCompletions, `{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_a","content":[{"type":"document","source":{"type":"url","url":"https://media.example.invalid/report.pdf"}}]}]}]}`, "document", "type"},
+		{"custom image to Chat", "openai-response", EndpointChatCompletions, `{"input":[{"type":"custom_tool_call_output","call_id":"call_a","output":[{"type":"input_image","image_url":"https://media.example.invalid/image.png"}]}]}`, "input_image", "output"},
+		{"custom image to Messages", "openai-response", EndpointMessages, `{"input":[{"type":"custom_tool_call_output","call_id":"call_a","output":[{"type":"input_image","image_url":"https://media.example.invalid/image.png"}]}]}`, "input_image", "output"},
+		{"custom PDF to Messages", "openai-response", EndpointMessages, `{"input":[{"type":"custom_tool_call_output","call_id":"call_a","output":[{"type":"input_file","file_data":"data:application/pdf;base64,JVBERi0xLjQK"}]}]}`, "input_file", "output"},
+		{"malformed document URL", "claude", EndpointResponses, `{"messages":[{"role":"user","content":[{"type":"document","source":{"type":"url","url":17}}]}]}`, "document", "source.url"},
+		{"missing image data", "claude", EndpointChatCompletions, `{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png"}}]}]}`, "image", "source.data"},
+		{"malformed document MIME", "claude", EndpointResponses, `{"messages":[{"role":"user","content":[{"type":"document","source":{"type":"base64","media_type":17,"data":"AA=="}}]}]}`, "document", "source.media_type"},
+		{"malformed document title", "claude", EndpointResponses, `{"messages":[{"role":"user","content":[{"type":"document","title":17,"source":{"type":"text","data":"synthetic"}}]}]}`, "document", "title"},
+		{"malformed Responses image", "openai-response", EndpointChatCompletions, `{"input":[{"role":"user","content":[{"type":"input_image","image_url":17}]}]}`, "input_image", "image_url"},
 		{"unresolved MIME", "openai-response", EndpointMessages, `{"input":[{"role":"user","content":[{"type":"input_file","file_data":"JVBERi0xLjQK"}]}]}`, "input_file", "file_data"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

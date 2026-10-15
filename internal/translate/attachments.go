@@ -50,6 +50,14 @@ func validateRequestAttachments(source, destination string, body []byte) error {
 			content := item["content"]
 			if kind := stringValue(item["type"]); kind == "function_call_output" || kind == "custom_tool_call_output" {
 				content = item["output"]
+				if kind == "custom_tool_call_output" {
+					for _, raw := range arrayValue(content) {
+						partKind := stringValue(objectValue(raw)["type"])
+						if slices.Contains([]string{"input_image", "input_file", "audio", "input_audio", "video", "input_video"}, partKind) {
+							return &AttachmentConversionError{Source: source, Destination: destination, Kind: partKind, Field: "output"}
+						}
+					}
+				}
 			}
 			if err := validateResponsesAttachments(destination, content); err != nil {
 				return err
@@ -79,6 +87,12 @@ func validateClaudeAttachments(destination string, content any) error {
 			if err := attachmentFields(part, allowed, err); err != nil {
 				return err
 			}
+			if title, exists := part["title"]; exists {
+				if _, ok := title.(string); !ok {
+					err.Field = "title"
+					return err
+				}
+			}
 			source := objectValue(part["source"])
 			var fields []string
 			switch stringValue(source["type"]) {
@@ -97,6 +111,12 @@ func validateClaudeAttachments(destination string, content any) error {
 			}
 			if err := attachmentFields(source, fields, err); err != nil {
 				return err
+			}
+			for _, field := range fields[1:] {
+				if value, ok := source[field].(string); !ok || strings.TrimSpace(value) == "" {
+					err.Field = "source." + field
+					return err
+				}
 			}
 		} else if kind == "audio" || kind == "input_audio" || kind == "video" || kind == "input_video" {
 			err.Field = "type"
@@ -134,6 +154,10 @@ func validateResponsesAttachments(destination string, content any) error {
 				}
 			}
 			if err := attachmentFields(part, allowed, err); err != nil {
+				return err
+			}
+			if value, ok := part["image_url"].(string); !ok || strings.TrimSpace(value) == "" {
+				err.Field = "image_url"
 				return err
 			}
 		} else if kind == "input_audio" || kind == "audio" || kind == "video" || kind == "input_video" {
