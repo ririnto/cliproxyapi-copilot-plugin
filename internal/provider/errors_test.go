@@ -136,3 +136,51 @@ func TestObservedClaudeWebSearchRejectionRemainsRequestScoped(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordUpstreamRejectionRetainsOnlyPrivateRedactedEvidence(t *testing.T) {
+	t.Setenv("CPA_COPILOT_UPSTREAM_EVIDENCE_FILE", "")
+	recordUpstreamRejection(http.StatusTooManyRequests, "/chat/completions", http.Header{"Retry-After": []string{"42"}}, "must not write")
+	header := http.Header{
+		"Content-Type":        []string{"application/json"},
+		"Retry-After":         []string{"60"},
+		"X-RateLimit-Limit":   []string{"50"},
+		"X-Ratelimit-Reset":   []string{"1792123456"},
+		"Authorization":       []string{"Bearer gho_BBBBBBBBBBBBBBBBBBBB"},
+		"X-Copilot-Api-Key":   []string{"gho_CCCCCCCCCCCCCCCCCCCC"},
+		"X-Github-Request-Id": []string{"public-id"},
+	}
+	header.Set("X-Request-Id", "opaque-copilot-bearer")
+	path := filepath.Join(t.TempDir(), "upstream-rejections.jsonl")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CPA_COPILOT_UPSTREAM_EVIDENCE_FILE", path)
+	recordUpstreamRejection(http.StatusTooManyRequests, "/chat/completions", header, `rate limited, leaked token "gho_AAAAAAAAAAAAAAAAAAAA" opaque-copilot-bearer`, "opaque-copilot-bearer")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("evidence file is not private: info=%v err=%v", info, err)
+	}
+	if strings.Contains(string(content), "opaque-copilot-bearer") {
+		t.Fatal("allowlisted header leaked a token")
+	}
+	entry := gjson.ParseBytes(content)
+	if entry.Get("status").Int() != http.StatusTooManyRequests || entry.Get("endpoint").String() != "/chat/completions" {
+		t.Fatalf("retained rejection lost its status or endpoint: %s", content)
+	}
+	if entry.Get("headers.retry-after").String() != "60" || entry.Get("headers.x-ratelimit-limit").String() != "50" || entry.Get("headers.x-ratelimit-reset").String() != "1792123456" || entry.Get("headers.x-github-request-id").String() != "public-id" {
+		t.Fatalf("retained rejection lost safe rate-limit headers: %s", content)
+	}
+	if entry.Get("headers.authorization").Exists() || entry.Get("headers.x-copilot-api-key").Exists() {
+		t.Fatalf("retained rejection kept a sensitive header: %s", content)
+	}
+	if strings.Contains(string(content), "gho_AAAAAAAAAAAAAAAAAAAA") {
+		t.Fatalf("retained rejection leaked a secret: %s", content)
+	}
+	if !strings.HasSuffix(string(content), "\n") {
+		t.Fatal("retained rejection is not newline-terminated JSONL")
+	}
+}

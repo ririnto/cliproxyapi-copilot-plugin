@@ -625,7 +625,6 @@ func previousUserFingerprint(messages [][]byte, before int) string {
 			fingerprint, _ := chatUserContentFingerprint(message.Get("content"))
 			return fingerprint
 		}
-		return ""
 	}
 	return ""
 }

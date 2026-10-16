@@ -1,6 +1,120 @@
 # Live Copilot compatibility validation
 
-## Current validation (2026-10-11)
+## Current validation (2026-10-16)
+
+The dependency and original-client checks use CLIProxyAPI SDK v8.0.30 with the same matched-host `replace` from `go.mod` and Go 1.27.2.
+Claude Code 2.1.300 and Codex CLI 0.162.1 ran directly in isolated task-owned homes against the matched host.
+The runs used a minimal task-private enabled copy of the Copilot auth record; the original auth record stayed read-only and untouched.
+Refresh activity, when it occurred, was isolated to the copy.
+All captures, ledgers and rejected bodies remain private; only verdicts and classifications appear here.
+
+All 18 protocol matrix cells passed across JSON and SSE with the task-local enabled profile, Gemini first.
+
+| Model | Chat | Responses | Messages |
+| --- | --- | --- | --- |
+| `gemini-3.8-flash` | JSON and SSE: PASS | JSON and SSE: PASS | JSON and SSE: PASS |
+| `gpt-6-luna` | JSON and SSE: PASS | JSON and SSE: PASS | JSON and SSE: PASS |
+| `claude-haiku-5.5` | JSON and SSE: PASS | JSON and SSE: PASS | JSON and SSE: PASS |
+
+| Client | Baseline | Web search | Delegation |
+| --- | --- | --- | --- |
+| Claude Code 2.1.300 | PASS | FAIL: Copilot returned HTTP 400 `unsupported_value` for the web search tool; unchanged external limit | Real Agent subdelegation: PASS |
+| Codex CLI 0.162.1 | PASS | PASS with a genuine native `web_search` invocation and meaningful results | Real child spawn, wait and handback: PASS, including attributed-answer phrasings and encrypted handback carriers |
+
+The original-client attachment packet added seven cross-client image and PDF cells with Claude Code 2.1.300 and Codex CLI 0.162.1 for `gemini-3.8-flash`, `gpt-6-luna` and `claude-haiku-5.5`.
+Its harness initially misclassified two things and both were corrected with retained evidence: Messages-style `tool_use` stream terminals were not recognized as ingress completion confirmations, and replay-time prior-user fingerprinting stopped at image-bearing user turns while seal-time fingerprinting skipped them.
+The replay fix lets sealed reasoning restore onto the SDK-coalesced assistant turn after an image-bearing user message, verified by an offline regression that fails with the old asymmetric fingerprint.
+The upstream rejection evidence recorder now retains a redacted, header-allowlisted private record of non-2xx Copilot inference responses when explicitly enabled; client-visible errors still never include provider response text.
+The attachment qualification remains incomplete. The retained earlier packet has one ACTUAL pass for `codex-claude-png`; its source and toolchain predate the subsequent fixes, so this is REUSED evidence for the current candidate, not a fresh final-candidate pass.
+The later bounded attempts returned HTTP 429 with `error.code: gate_dispatch_denied`. Source inspection identifies this response as a **local test-harness refusal**, emitted by `liveServerToolGate.serveHTTP` when `reserve` denies a dispatch. The persistent ledger already froze the affected cell after the earlier failure; its physical inference count did not increase during these attempts. The requests did not establish a new Copilot inference response.
+Consequently these local refusals establish neither Copilot quota exhaustion, provider throttling, nor a provider routing/protocol error. No provider reset time is known. The CLI's `unrecognized_model` diagnostic is not proof of an unsupported model either.
+One changed-evidence qualification packet then used distinct attempt keys without clearing any frozen historical entries, in Gemini, Haiku and Luna order. It made six physical inference dispatches across five cells; both Luna cells were blocked before inference after the harness lost readiness. The local-denial attempts must not be counted as physical provider dispatches.
+That packet used the previously built plugin, not the final review-fixed artifact. The matched-host suite exposed the stale artifact by observing `validated` where the corrected mandatory-tool test expected `required`. Rebuilding the plugin before rerunning the native suite resolved all six leaf failures; the fresh native suite passed. At that stage, no additional live packet had run against the final artifact.
+The changed packet re-passed Codex-to-Haiku PNG. Both Claude-to-Gemini image/PDF cells produced real Read calls and results but failed final completion and public carrier/terminal proofs. Codex-to-Gemini PNG returned the correct image answer with high detail preserved but failed the required public-terminal proof, so it remains FAILED, not accepted. Codex-to-Haiku PDF hit local HTTP 400 `attachment_request_unprepared` on a route the harness did not admit. These are unresolved qualification-harness failures, not established external provider blockers.
+In that earlier packet, `codex-gemini-pdf` was NOT RUN because its harness cell did not yet exist.
+The earlier missing combinations and original-format multi-turn reasoning acceptance remained incomplete.
+All earlier failed verdicts remain retained without rewriting them after later harness changes.
+The PDF preflight again requires the exact previously verified rendered-page SHA-256. The attempted pixel-density substitute was removed after review because it could accept unreadable glyph substitutes and misclassify unsigned color differences. JPEG carrier checks remain separate from printed-code and final-answer acceptance.
+
+### Final-artifact attachment packet
+
+The harness now defines all twelve original-client, exact-model and media combinations.
+Offline checks cover actual ingress and public-gate HTTP boundaries, persistent budgets, readiness failure, and original-format tool/reasoning replay.
+Review corrections require every tool-turn reasoning carrier at its own call/name/argument anchor.
+They also bind actual Claude PDF media to the verified JPEG hash and Codex PDF media to an exact-source offline PNG render.
+Native Responses must preserve image detail, assistant item/call identity, canonical arguments and paired results.
+
+Before traffic, the rebuilt plugin passed the matched native-host suite with 220 PASS markers and zero failures.
+The installed original clients and maintained renderer passed their offline preflights.
+One final-artifact packet then persisted twelve ordered cells, one attempt per cell, a per-cell cap of four and a total cap of 48 physical inference dispatches.
+Frozen historical counts remained unchanged.
+The order was Gemini, Haiku, then Luna.
+
+| Cell | Actual packet result | Physical inference dispatches |
+| --- | --- | --- |
+| `claude-gemini-png` | FAILED: original-client capture readiness was lost. | 1 |
+| `claude-gemini-pdf` | NOT RUN: packet stopped. | 0 |
+| `codex-gemini-png` | NOT RUN: packet stopped. | 0 |
+| `codex-gemini-pdf` | NOT RUN: packet stopped. | 0 |
+| `claude-claude-png` | NOT RUN: packet stopped. | 0 |
+| `claude-claude-pdf` | NOT RUN: packet stopped. | 0 |
+| `codex-claude-png` | NOT RUN: packet stopped. | 0 |
+| `codex-claude-pdf` | NOT RUN: packet stopped. | 0 |
+| `claude-gpt-png` | NOT RUN: packet stopped. | 0 |
+| `claude-gpt-pdf` | NOT RUN: packet stopped. | 0 |
+| `codex-gpt-png` | NOT RUN: packet stopped. | 0 |
+| `codex-gpt-pdf` | NOT RUN: packet stopped. | 0 |
+
+The provider returned a valid Chat tool-call stream for the first cell.
+The translated Messages stream included an empty `thinking` block with a nonempty signature carrier.
+The ingress validator rejected that representation and denied the next local client request before another provider dispatch.
+Systemic readiness stopping prevented requests for all eleven remaining cells.
+The packet made exactly one physical inference dispatch, increasing the retained ledger total from 13 to 14.
+This is a local qualification failure, not evidence of provider quota exhaustion or throttling.
+
+A subsequent offline regression reproduced the signature-only carrier failure through the actual ingress HTTP boundary.
+The validator now accepts that carrier alongside a meaningful tool/text block, while rejecting empty unsigned thinking.
+That correction passed offline tests and race checks, but received no additional live qualification.
+No packet restart, cell retry, ledger clearing or second final-artifact packet occurred.
+Final original-client attachment and multi-turn reasoning acceptance remains incomplete.
+Earlier protocol and client passes remain historical evidence rather than acceptance of these twelve cells.
+
+### Follow-up owned-boundary qualification
+
+The follow-up census found that the former Codex Haiku PDF route could switch from native Messages preparation to Chat after signed reasoning was issued.
+Native Messages signatures are not Chat-owned carriers, so rejecting that switch is correct.
+This cell now selects a separate task-owned Chat-configured host before bootstrap and keeps that route throughout the conversation.
+Claude Haiku cells retain native Messages.
+The public gate admits exact-source Haiku PDF Chat preparation without permitting the former mixed route.
+
+Actual installed-client replay now composes original ingress, the matched native host, production translation, the public gate, synthetic loopback provider responses and the unchanged full acceptance predicate.
+It also exercises source-derived PDF rendering and native tool execution rather than substituting client event fixtures.
+The replay exposed two additional corrections.
+Claude Read continuations now correlate encoded tool identity and canonical arguments against both original and public captures before recognizing the result.
+Claude-to-Responses requests now restore an omitted native reasoning item ID using the existing exact-ciphertext, unique-owner, same-scope cache.
+Explicit IDs, foreign ciphertext and ambiguous ownership are not rewritten.
+Both buffered and streamed execution use that existing restoration capability.
+The reasoning observer remains strict.
+
+Codex retains its native read-only sandbox for PNG and workspace-write sandbox for PDF without a nested external Seatbelt wrapper.
+The owned offline host and Claude client use the existing loopback Seatbelt wrapper.
+Codex uses isolated client configuration and the synthetic task-proxy route; these checks do not establish universal OS-level network denial for its parent process.
+A separate read-only HTTP regression forwards the exact retained failed ingress transaction without sending its private carriers to a synthetic provider.
+
+The final owned offline twelve-cell run passed ten cells against the full acceptance predicate.
+Both `codex-gpt-png` and `codex-gpt-pdf` remain FAILED because original and public native Responses image detail is omitted rather than explicitly `high`.
+Their tools, final answers, source-bound media and reasoning replay complete, but those successes do not override the required detail assertion.
+The installed Codex CLI 0.162.1 embeds `gpt-6-luna` metadata with `use_responses_lite=true`.
+Inspected Codex source removes image detail from both initial image content and tool-output images for that model mode.
+No supported inspected configuration override preserves explicit high detail without replacing the required catalog or model.
+This is an unmet installed-client prerequisite, not a reason to manufacture metadata, inject detail after original capture or weaken acceptance.
+
+The rebuilt plugin passed the matched native-host suite with 220 PASS markers and zero failures.
+No new live packet was armed or dispatched during this follow-up.
+The historical physical inference ledger remains 14, and all earlier failed and NOT RUN records remain unchanged.
+Final twelve-cell acceptance remains incomplete.
+
+## Historical validation (2026-10-11)
 
 The latest dependency and original-client checks use CLIProxyAPI SDK v8.0.30.
 The matched host used `replace github.com/router-for-me/CLIProxyAPI/v8 => github.com/ririnto/CLIProxyAPI/v8 v8.0.0-20261010040012-c48c64443575` from `go.mod` and Go 1.27.2.

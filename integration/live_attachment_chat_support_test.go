@@ -71,27 +71,37 @@ type liveChatToolCallBuilder struct {
 	arguments strings.Builder
 }
 
-func liveAttachmentOriginalResponsesToolCalls(captures []liveAttachmentIngressCapture) map[string]liveAttachmentCapturedToolCall {
+func liveAttachmentOriginalToolCalls(captures []liveAttachmentIngressCapture) map[string]liveAttachmentCapturedToolCall {
 	calls := make(map[string]liveAttachmentCapturedToolCall)
 	for _, capture := range captures {
 		requestURL, err := url.Parse(capture.Request.URL)
-		if err != nil || requestURL.Path != "/v1/responses" || !capture.Dispatched || !capture.BodyComplete || !capture.StreamTerminalComplete || capture.CaptureTruncated || capture.Response.Status < 200 || capture.Response.Status >= 300 {
+		if err != nil || requestURL.Path != "/v1/responses" && requestURL.Path != "/v1/messages" || !capture.Dispatched || !capture.BodyComplete || !capture.StreamTerminalComplete || capture.CaptureTruncated || capture.Response.Status < 200 || capture.Response.Status >= 300 {
 			continue
 		}
 		for _, event := range attachmentStreamObjects(capture.Response.Body) {
-			if event["type"] != "response.output_item.done" {
+			if event["type"] != "response.output_item.done" && event["type"] != "assembled_tool_use" {
 				continue
 			}
 			item, ok := event["item"].(map[string]any)
-			if !ok || item["type"] != "function_call" {
+			if !ok || item["type"] != "function_call" && item["type"] != "tool_use" {
 				continue
 			}
 			itemID := attachmentString(item, "id")
 			callID := attachmentString(item, "call_id")
 			name := attachmentString(item, "name")
-			argumentsText := attachmentString(item, "arguments")
 			var arguments map[string]any
-			if itemID == "" || callID == "" || name == "" || argumentsText == "" || json.Unmarshal([]byte(argumentsText), &arguments) != nil || arguments == nil {
+			if item["type"] == "tool_use" {
+				arguments, _ = item["input"].(map[string]any)
+				var encoded bool
+				itemID, callID, encoded = translate.DecodeClaudeToolIDs(itemID)
+				if !encoded {
+					callID = attachmentString(item, "id")
+					itemID = "fc_" + callID
+				}
+			} else if json.Unmarshal([]byte(attachmentString(item, "arguments")), &arguments) != nil {
+				return nil
+			}
+			if itemID == "" || callID == "" || name == "" || arguments == nil {
 				return nil
 			}
 			call := liveAttachmentCapturedToolCall{ItemID: itemID, CallID: callID, Name: name, Arguments: arguments}
@@ -104,11 +114,52 @@ func liveAttachmentOriginalResponsesToolCalls(captures []liveAttachmentIngressCa
 	return calls
 }
 
-func liveAttachmentChatHistoryCorrelations(request liveAttachmentChatRequestEvidence, originalCalls, messagesCalls map[string]liveAttachmentCapturedToolCall) (map[string]string, bool) {
-	if len(request.ToolCalls) != 2 || len(request.ToolResults) != 2 || len(originalCalls) != 2 || len(messagesCalls) != 2 {
+func liveAttachmentResponsesHistoryCorrelated(body string, originalCalls, publicCalls map[string]liveAttachmentCapturedToolCall) bool {
+	var root map[string]any
+	if json.Unmarshal([]byte(body), &root) != nil {
+		return false
+	}
+	items, ok := root["input"].([]any)
+	if !ok {
+		return false
+	}
+	seenCalls, seenResults := make(map[string]bool), make(map[string]bool)
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return false
+		}
+		callID := attachmentString(item, "call_id")
+		switch item["type"] {
+		case "function_call":
+			original, originalOK := originalCalls[callID]
+			public, publicOK := publicCalls[callID]
+			var arguments map[string]any
+			if !originalOK || !publicOK || seenCalls[callID] || attachmentString(item, "id") != original.ItemID || original.ItemID != public.ItemID || attachmentString(item, "name") != original.Name || original.Name != public.Name || json.Unmarshal([]byte(attachmentString(item, "arguments")), &arguments) != nil || liveAttachmentArgumentSHA256(arguments) == "" || liveAttachmentArgumentSHA256(arguments) != liveAttachmentArgumentSHA256(original.Arguments) || liveAttachmentArgumentSHA256(arguments) != liveAttachmentArgumentSHA256(public.Arguments) {
+				return false
+			}
+			seenCalls[callID] = true
+		case "function_call_output":
+			if !seenCalls[callID] || seenResults[callID] {
+				return false
+			}
+			seenResults[callID] = true
+		}
+	}
+	return len(seenCalls) == len(seenResults)
+}
+
+func liveAttachmentChatHistoryCorrelations(request liveAttachmentChatRequestEvidence, originalCalls, messagesCalls map[string]liveAttachmentCapturedToolCall, requiredNames ...string) (map[string]string, bool) {
+	if len(requiredNames) == 0 {
+		requiredNames = []string{"exec_command", "view_image"}
+	}
+	if len(request.ToolCalls) != len(requiredNames) || len(request.ToolResults) != len(requiredNames) || len(originalCalls) < len(requiredNames) || len(messagesCalls) < len(requiredNames) {
 		return nil, false
 	}
-	acceptedNames := map[string]bool{"exec_command": false, "view_image": false}
+	acceptedNames := make(map[string]bool, len(requiredNames))
+	for _, name := range requiredNames {
+		acceptedNames[name] = false
+	}
 	carrierNames := make(map[string]string, len(request.ToolCalls))
 	seenCallIDs := make(map[string]bool, len(request.ToolCalls))
 	for _, call := range request.ToolCalls {
@@ -123,8 +174,10 @@ func liveAttachmentChatHistoryCorrelations(request liveAttachmentChatRequestEvid
 		acceptedNames[call.Name] = true
 		carrierNames[call.ID] = call.Name
 	}
-	if !acceptedNames["exec_command"] || !acceptedNames["view_image"] {
-		return nil, false
+	for _, seen := range acceptedNames {
+		if !seen {
+			return nil, false
+		}
 	}
 	seenResults := make(map[string]bool, len(request.ToolResults))
 	for _, result := range request.ToolResults {
@@ -292,7 +345,7 @@ func liveAttachmentChatRequest(body []byte, candidate liveAttachmentCase) (liveA
 				}
 			}
 		}
-		if !viewImageResult {
+		if !viewImageResult && !liveAttachmentChatPDFPreparation(request, evidence, candidate) {
 			return liveAttachmentChatRequestEvidence{}, false
 		}
 	}
@@ -317,6 +370,47 @@ func liveAttachmentChatRequest(body []byte, candidate liveAttachmentCase) (liveA
 		return liveAttachmentChatRequestEvidence{}, false
 	}
 	return evidence, true
+}
+
+func liveAttachmentChatPDFPreparation(request map[string]any, evidence liveAttachmentChatRequestEvidence, candidate liveAttachmentCase) bool {
+	if candidate.model != "gemini-3.8-flash" && candidate.model != "claude-haiku-5.5" || len(evidence.Images) != 0 || !filepath.IsAbs(candidate.fixture) {
+		return false
+	}
+	tools, _ := request["tools"].([]any)
+	hasExec, hasView := false, false
+	for _, raw := range tools {
+		tool, _ := raw.(map[string]any)
+		function, _ := tool["function"].(map[string]any)
+		hasExec = hasExec || tool["type"] == "function" && function["name"] == "exec_command"
+		hasView = hasView || tool["type"] == "function" && function["name"] == "view_image"
+	}
+	messages, _ := request["messages"].([]any)
+	var userText strings.Builder
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["role"] == "user" {
+			text, valid := liveChatToolContent(message["content"])
+			if !valid {
+				return false
+			}
+			userText.WriteString(text)
+		}
+	}
+	if !hasExec || !hasView || !liveAttachmentMessagesSourcePrompt(userText.String(), candidate) {
+		return false
+	}
+	if len(evidence.ToolCalls) == 0 && len(evidence.ToolResults) == 0 {
+		return true
+	}
+	if len(evidence.ToolCalls) != 1 || len(evidence.ToolResults) != 1 {
+		return false
+	}
+	call, result := evidence.ToolCalls[0], evidence.ToolResults[0]
+	workdir := attachmentString(call.Arguments, "workdir")
+	if workdir == "" && strings.Contains(userText.String(), "<cwd>"+filepath.Dir(candidate.fixture)+"</cwd>") {
+		workdir = filepath.Dir(candidate.fixture)
+	}
+	return call.Name == "exec_command" && call.ID == result.ID && workdir == filepath.Dir(candidate.fixture) && !result.Failed && !result.HasImage && liveAttachmentPDFRenderCommand(attachmentString(call.Arguments, "cmd"), candidate.fixture) && liveAttachmentPDFRenderOutput(result.Content)
 }
 
 func liveAttachmentMessagesRequest(body []byte, candidate liveAttachmentCase) bool {
@@ -443,6 +537,9 @@ func liveAttachmentPDFRendererContinuation(messages []any, candidate liveAttachm
 			return false
 		}
 	}
+	if workdir == "" && strings.Contains(userText, "<cwd>"+filepath.Dir(candidate.fixture)+"</cwd>") {
+		workdir = filepath.Dir(candidate.fixture)
+	}
 	if callID == "" || workdir != filepath.Dir(candidate.fixture) || !liveAttachmentPDFRenderCommand(command, candidate.fixture) {
 		return false
 	}
@@ -461,10 +558,16 @@ func liveAttachmentPDFRendererContinuation(messages []any, candidate liveAttachm
 
 func liveAttachmentPDFRenderCommand(command, fixture string) bool {
 	parts := strings.Fields(command)
-	if len(parts) != 7 && len(parts) != 8 {
+	if len(parts) < 4 || parts[0] != "pdftoppm" || parts[1] != "-png" || parts[2] != fixture || parts[3] != "page" {
 		return false
 	}
-	return parts[0] == "pdftoppm" && parts[1] == "-png" && parts[2] == fixture && parts[3] == "page" && parts[4] == "&&" && parts[5] == "ls" && parts[6] == "-la" && (len(parts) == 7 || parts[7] == "page*")
+	if len(parts) == 4 {
+		return true
+	}
+	if len(parts) < 6 || parts[4] != "&&" || parts[5] != "ls" {
+		return false
+	}
+	return len(parts) == 6 || len(parts) == 7 && (parts[6] == "-la" || parts[6] == "page*") || len(parts) == 8 && parts[6] == "-la" && parts[7] == "page*"
 }
 
 func liveAttachmentPDFRenderOutput(output string) bool {
@@ -480,7 +583,7 @@ func liveAttachmentPDFRenderOutput(output string) bool {
 		if strings.HasPrefix(line, "Process exited with code ") && line != "Process exited with code 0" {
 			return false
 		}
-		if strings.HasSuffix(strings.TrimSpace(line), "page-1.png") && strings.HasPrefix(strings.TrimSpace(line), "-rw") {
+		if strings.TrimSpace(line) == "page-1.png" || strings.HasSuffix(strings.TrimSpace(line), "page-1.png") && strings.HasPrefix(strings.TrimSpace(line), "-rw") {
 			hasRenderedPage = true
 		}
 	}
@@ -523,12 +626,18 @@ func liveChatAttachmentImages(value any) ([]liveChatAttachmentImage, bool) {
 			return
 		}
 		dataURL := attachmentString(imageURL, "url")
-		if !strings.HasPrefix(dataURL, "data:image/png;base64,") {
+		prefix, isPNG, isJPEG := "", false, false
+		switch {
+		case strings.HasPrefix(dataURL, "data:image/png;base64,"):
+			prefix, isPNG = "data:image/png;base64,", true
+		case strings.HasPrefix(dataURL, "data:image/jpeg;base64,"):
+			prefix, isJPEG = "data:image/jpeg;base64,", true
+		default:
 			valid = false
 			return
 		}
-		data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(dataURL, "data:image/png;base64,"))
-		if err != nil || !bytes.HasPrefix(data, []byte("\x89PNG\r\n\x1a\n")) {
+		data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(dataURL, prefix))
+		if err != nil || isPNG && !bytes.HasPrefix(data, []byte("\x89PNG\r\n\x1a\n")) || isJPEG && (len(data) <= 4 || !bytes.HasPrefix(data, []byte("\xff\xd8\xff")) || !bytes.HasSuffix(data, []byte("\xff\xd9"))) {
 			valid = false
 			return
 		}
@@ -614,6 +723,7 @@ func liveAttachmentCapturedResponseCompleted(body string, candidate liveAttachme
 	if candidate.client == "codex" && candidate.media == "pdf" && publicPath == "/v1/messages" {
 		return false
 	}
+	candidate.modelPath = publicPath
 	return attachmentResponseCompleted(body, candidate)
 }
 
@@ -686,10 +796,26 @@ func liveChatCompletionStream(body []byte, expectedModel string) (liveChatComple
 			prompt, promptOK := liveChatTokenValue(usage["prompt_tokens"])
 			completion, completionOK := liveChatTokenValue(usage["completion_tokens"])
 			total, totalOK := liveChatTokenValue(usage["total_tokens"])
-			if !promptOK || !completionOK || !totalOK || completion == 0 || total != prompt+completion || finishSeen && usageSeen && (prompt != usagePrompt || completion != usageCompletion || total != usageTotal) {
+			reasoning := int64(0)
+			if value, exists := usage["reasoning_tokens"]; exists {
+				var valid bool
+				reasoning, valid = liveChatTokenValue(value)
+				if !valid {
+					return evidence, false
+				}
+			}
+			authoritative := finishSeen
+			for _, rawChoice := range choices {
+				if choice, ok := rawChoice.(map[string]any); ok && choice["finish_reason"] != nil {
+					authoritative = true
+				}
+			}
+			if !promptOK || !completionOK || !totalOK || total != prompt+completion+reasoning || authoritative && completion == 0 || finishSeen && usageSeen && (prompt != usagePrompt || completion != usageCompletion || total != usageTotal) {
 				return evidence, false
 			}
-			usageSeen, usagePrompt, usageCompletion, usageTotal = true, prompt, completion, total
+			if authoritative {
+				usageSeen, usagePrompt, usageCompletion, usageTotal = true, prompt, completion, total
+			}
 		}
 		if len(choices) == 0 {
 			if !finishSeen || !usageSeen {
@@ -893,6 +1019,77 @@ func TestLiveChatAttachmentRequestPreservesBytesDetailAndToolIDs(t *testing.T) {
 	}
 }
 
+func TestLiveChatAttachmentRequestAcceptsClaudePDFPageImage(t *testing.T) {
+	candidate := liveAttachmentCases()[5]
+	page := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0xFF, 0xD9}
+	request := map[string]any{
+		"model": candidate.model, "stream": true, "reasoning_effort": "medium", "tool_choice": "validated",
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "Use the built-in Read tool to inspect the PDF file."}}},
+			map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"id": "call-read", "type": "function", "function": map[string]any{"name": "Read", "arguments": `{"file_path":"document.pdf","pages":"1"}`}}}},
+			map[string]any{"role": "tool", "tool_call_id": "call-read", "content": []any{
+				map[string]any{"type": "text", "text": "page 1"},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(page)}},
+			}},
+		},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, ok := liveAttachmentChatRequest(encoded, candidate)
+	if !ok || evidence.Model != "gemini-3.8-flash" || evidence.Effort != "medium" || len(evidence.Images) != 1 || len(evidence.ToolCalls) != 1 || evidence.ToolCalls[0].Name != "Read" || len(evidence.ToolResults) != 1 || !evidence.ToolResults[0].HasImage {
+		t.Fatal("valid Claude PDF Read continuation with a JPEG page was rejected")
+	}
+	for name, alter := range map[string]func(map[string]any){
+		"native-pdf-carrier": func(value map[string]any) {
+			value["messages"].([]any)[2].(map[string]any)["content"].([]any)[1].(map[string]any)["image_url"].(map[string]any)["url"] = "data:application/pdf;base64," + base64.StdEncoding.EncodeToString([]byte("%PDF-trap"))
+		},
+		"corrupt-jpeg": func(value map[string]any) {
+			value["messages"].([]any)[2].(map[string]any)["content"].([]any)[1].(map[string]any)["image_url"].(map[string]any)["url"] = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString([]byte("not-jpeg"))
+		},
+		"wrong-effort": func(value map[string]any) {
+			value["reasoning_effort"] = "low"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value map[string]any
+			if json.Unmarshal(changed, &value) != nil {
+				t.Fatal("test request did not decode")
+			}
+			alter(value)
+			changed, err = json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := liveAttachmentChatRequest(changed, candidate); ok {
+				t.Fatal("PDF file carrier, corrupt JPEG, or wrong effort was accepted")
+			}
+		})
+	}
+	prepared := liveAttachmentEvidence{
+		NativePDFPage: true, ClientMediaSHA256: attachmentExpectedReadablePDFPageSHA256, IngressMediaSHA256: attachmentExpectedReadablePDFPageSHA256, PublicMediaSHA256: attachmentExpectedReadablePDFPageSHA256, SourceSHA256: "source",
+		ClientMediaCount: 1, IngressMediaCount: 1, PublicMediaCount: 1, ClientReadCount: 1, IngressReadCount: 1, PublicReadCount: 1,
+		ClientReadArgsSHA256: "args", IngressReadArgsSHA256: "args", PublicReadArgsSHA256: "args",
+	}
+	if !liveAttachmentMediaPrepared(candidate, prepared) {
+		t.Fatal("complete Claude PDF page evidence chain was not accepted")
+	}
+	prepared.PublicMediaCount = 0
+	if liveAttachmentMediaPrepared(candidate, prepared) {
+		t.Fatal("Claude PDF chain passed without exactly one public media part")
+	}
+	pngCase := liveAttachmentCases()[4]
+	pngEvidence := liveAttachmentEvidence{SourcePreparedEqual: true}
+	if !liveAttachmentMediaPrepared(pngCase, pngEvidence) {
+		t.Fatal("byte-identical Claude PNG fixture was not accepted")
+	}
+}
+
 func TestLiveChatAttachmentPDFContinuationRequiresHighViewImageResult(t *testing.T) {
 	candidate := liveAttachmentCases()[3]
 	image, err := os.ReadFile(attachmentPNG)
@@ -979,13 +1176,24 @@ func TestLiveChatAttachmentStreamReconstructsCallsAndRejectsIncompleteResults(t 
 	if liveAttachmentCapturedResponseCompleted(callStream, liveAttachmentCases()[3], "/chat/completions") {
 		t.Fatal("a completed tool_calls response was mistaken for a final user-facing answer")
 	}
+	zeroUsage := liveChatTestFrame(t, map[string]any{"model": "claude-haiku-5.5", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": nil}}, "usage": map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}})
+	nativeReasoning := strings.ReplaceAll(callStream, `"total_tokens":15`, `"total_tokens":19,"reasoning_tokens":4`)
+	for name, valid := range map[string]string{"zero-interim": zeroUsage + callStream, "native-separate-reasoning": zeroUsage + nativeReasoning} {
+		if _, ok := liveChatCompletionStream([]byte(valid), "claude-haiku-5.5"); !ok {
+			t.Fatalf("native usage stream %s was rejected", name)
+		}
+	}
 	for name, invalid := range map[string]string{
-		"truncated":      strings.TrimSuffix(callStream, "data: [DONE]\n\n"),
-		"wrong-model":    strings.Replace(callStream, `"model":"claude-haiku-5.5"`, `"model":"claude-haiku-5.5-low"`, 1),
-		"missing-usage":  strings.ReplaceAll(callStream, `,"usage":{"completion_tokens":5,"prompt_tokens":10,"total_tokens":15}`, ""),
-		"bad-finish":     strings.Replace(callStream, `"finish_reason":"tool_calls"`, `"finish_reason":"length"`, 1),
-		"bad-arguments":  strings.Replace(callStream, `"arguments":"\"}"`, `"arguments":"not-json"`, 1),
-		"trailing-frame": callStream + "data: [DONE]\n\n",
+		"interim-is-not-terminal-usage": zeroUsage + strings.ReplaceAll(callStream, `,"usage":{"completion_tokens":5,"prompt_tokens":10,"total_tokens":15}`, ""),
+		"unexplained-total":             strings.ReplaceAll(callStream, `"total_tokens":15`, `"total_tokens":19`),
+		"negative-reasoning":            strings.ReplaceAll(callStream, `"total_tokens":15`, `"total_tokens":14,"reasoning_tokens":-1`),
+		"details-not-additive":          strings.ReplaceAll(callStream, `"total_tokens":15`, `"total_tokens":19,"completion_tokens_details":{"reasoning_tokens":4}`),
+		"truncated":                     strings.TrimSuffix(callStream, "data: [DONE]\n\n"),
+		"wrong-model":                   strings.Replace(callStream, `"model":"claude-haiku-5.5"`, `"model":"claude-haiku-5.5-low"`, 1),
+		"missing-usage":                 strings.ReplaceAll(callStream, `,"usage":{"completion_tokens":5,"prompt_tokens":10,"total_tokens":15}`, ""),
+		"bad-finish":                    strings.Replace(callStream, `"finish_reason":"tool_calls"`, `"finish_reason":"length"`, 1),
+		"bad-arguments":                 strings.Replace(callStream, `"arguments":"\"}"`, `"arguments":"not-json"`, 1),
+		"trailing-frame":                callStream + "data: [DONE]\n\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if invalid == callStream {
@@ -1049,7 +1257,7 @@ func TestLiveChatAttachmentResponseCaptureRequiresCompleteNativeTerminal(t *test
 	}
 }
 
-func TestLiveChatAttachmentCapturedCodexPDFMessagesBootstrapIsContextual(t *testing.T) {
+func TestAttachmentHistoricalPDFMessagesBootstrapCannotEnableMixedRoute(t *testing.T) {
 	candidate := liveAttachmentCases()[3]
 	candidate.fixture = filepath.Join(t.TempDir(), "client-workspace", "document.pdf")
 	request := map[string]any{
@@ -1070,8 +1278,8 @@ func TestLiveChatAttachmentCapturedCodexPDFMessagesBootstrapIsContextual(t *test
 	gate.mu.Lock()
 	preparedFixture := gate.attachmentFixtures[cell]
 	gate.mu.Unlock()
-	if !liveAttachmentMessagesRequest(encoded, candidate) || preparedFixture != candidate.fixture || liveAttachmentPreparedPublicRequest(cell, "/v1/messages", encoded) || !liveAttachmentPreparedPublicRequestForFixture(cell, "/v1/messages", encoded, preparedFixture) {
-		t.Fatal("the exact same-model, medium-effort PDF bootstrap Messages request was rejected")
+	if !liveAttachmentMessagesRequest(encoded, candidate) || preparedFixture != candidate.fixture || liveAttachmentPreparedPublicRequest(cell, "/v1/messages", encoded) || liveAttachmentPreparedPublicRequestForFixture(cell, "/v1/messages", encoded, preparedFixture) {
+		t.Fatal("historical contextual preparation was lost or re-enabled the unsupported mixed route")
 	}
 	if liveAttachmentPreparedPublicRequestForFixture(cell, "/responses", encoded, preparedFixture) || liveAttachmentPreparedPublicRequestForFixture(cell, "/chat/completions", encoded, preparedFixture) {
 		t.Fatal("the pre-media Messages request was admitted on a different endpoint")
@@ -1100,14 +1308,14 @@ func TestLiveChatAttachmentCapturedCodexPDFMessagesBootstrapIsContextual(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			if liveAttachmentPreparedPublicRequestForFixture(cell, "/v1/messages", changed, preparedFixture) {
+			if liveAttachmentMessagesRequest(changed, candidate) || liveAttachmentPreparedPublicRequestForFixture(cell, "/v1/messages", changed, preparedFixture) {
 				t.Fatal("lossy model/effort, different source path, or media bootstrap was accepted")
 			}
 		})
 	}
 }
 
-func TestLiveChatAttachmentCapturedCodexPDFMessagesRenderContinuationIsContextual(t *testing.T) {
+func TestAttachmentHistoricalPDFMessagesRendererCannotEnableMixedRoute(t *testing.T) {
 	candidate := liveAttachmentCases()[3]
 	workspace := filepath.Join(t.TempDir(), "client-workspace")
 	candidate.fixture = filepath.Join(workspace, "document.pdf")
@@ -1133,10 +1341,34 @@ func TestLiveChatAttachmentCapturedCodexPDFMessagesRenderContinuationIsContextua
 		},
 	}
 	encoded, err := json.Marshal(request)
-	if err != nil || !liveAttachmentMessagesRequest(encoded, candidate) || !liveAttachmentPreparedPublicRequestForFixture("X-fixture/"+candidate.cell, "/v1/messages", encoded, candidate.fixture) {
-		t.Fatal("same-model medium-effort PDF renderer continuation with a correlated successful result was rejected")
+	if err != nil || !liveAttachmentMessagesRequest(encoded, candidate) || liveAttachmentPreparedPublicRequestForFixture("X-fixture/"+candidate.cell, "/v1/messages", encoded, candidate.fixture) {
+		t.Fatal("historical renderer preparation was lost or re-enabled the unsupported mixed route")
 	}
 
+	for _, suffix := range []string{" && ls", " && ls -la", " && ls page*", " && ls -la page*"} {
+		t.Run("inherited-workdir"+suffix, func(t *testing.T) {
+			var changed map[string]any
+			if err := json.Unmarshal(encoded, &changed); err != nil {
+				t.Fatal(err)
+			}
+			input := changed["messages"].([]any)[1].(map[string]any)["content"].([]any)[2].(map[string]any)["input"].(map[string]any)
+			delete(input, "workdir")
+			input["cmd"] = "pdftoppm -png " + candidate.fixture + " page" + suffix
+			changed["messages"].([]any)[2].(map[string]any)["content"].([]any)[0].(map[string]any)["content"] = "Chunk ID: fixture\nWall time: 2.2 seconds\nProcess exited with code 0\nOutput:\npage-1.png\n"
+			body, err := json.Marshal(changed)
+			if err != nil || !liveAttachmentMessagesRequest(body, candidate) || liveAttachmentPreparedPublicRequestForFixture("X-fixture/"+candidate.cell, "/v1/messages", body, candidate.fixture) {
+				t.Fatal("historical bounded command was lost or re-enabled the unsupported mixed route")
+			}
+			changed["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"] = "<environment_context><cwd>/other</cwd></environment_context>"
+			body, err = json.Marshal(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if liveAttachmentMessagesRequest(body, candidate) || liveAttachmentPreparedPublicRequestForFixture("X-fixture/"+candidate.cell, "/v1/messages", body, candidate.fixture) {
+				t.Fatal("omitted workdir accepted without the matching isolated cwd")
+			}
+		})
+	}
 	for name, alter := range map[string]func(map[string]any){
 		"wrong-model": func(value map[string]any) { value["model"] = "claude-haiku-5.5-low" },
 		"wrong-effort": func(value map[string]any) {
@@ -1190,7 +1422,7 @@ func TestLiveChatAttachmentCapturedCodexPDFMessagesRenderContinuationIsContextua
 			if err != nil {
 				t.Fatal(err)
 			}
-			if liveAttachmentPreparedPublicRequestForFixture("X-fixture/"+candidate.cell, "/v1/messages", body, candidate.fixture) {
+			if liveAttachmentMessagesRequest(body, candidate) || liveAttachmentPreparedPublicRequestForFixture("X-fixture/"+candidate.cell, "/v1/messages", body, candidate.fixture) {
 				t.Fatal("unrelated, failed, uncorrelated, or lossy PDF Messages continuation was admitted")
 			}
 		})
