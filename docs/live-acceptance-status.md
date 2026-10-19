@@ -38,9 +38,9 @@ URLs, results, identifiers, replay tokens and interrupt frames must not be inven
 
 ## Offline delivery and integration
 
-**ACTUAL** offline delivery includes reviewed [PR #36](https://github.com/ririnto/cpa-copilot-bridge/pull/36) and [PR #41](https://github.com/ririnto/cpa-copilot-bridge/pull/41), with local tests, race checks, vet, matched native-host groups and public CI.
-[Issue #43](https://github.com/ririnto/cpa-copilot-bridge/issues/43) separately owns representable standard URL citations in Chat JSON.
-[PR #35](https://github.com/ririnto/cpa-copilot-bridge/pull/35) owns the final feature completion matrix.
+**ACTUAL** offline delivery includes reviewed hosted-search replay and strict Chat request fidelity, with local tests, race checks, vet, matched native-host groups and public CI.
+Standard URL citations in Chat JSON have separate validation evidence.
+The [feature completion matrix](feature-completion.md) records implementation and external acceptance limits.
 Those offline results do not remove the four NOT RUN cases.
 
 Promotion requires a dedicated reviewed migration with matched-host validation and rollback requirements.
