@@ -25,16 +25,33 @@ The original-client attachment packet added seven cross-client image and PDF cel
 Its harness initially misclassified two things and both were corrected with retained evidence: Messages-style `tool_use` stream terminals were not recognized as ingress completion confirmations, and replay-time prior-user fingerprinting stopped at image-bearing user turns while seal-time fingerprinting skipped them.
 The replay fix lets sealed reasoning restore onto the SDK-coalesced assistant turn after an image-bearing user message, verified by an offline regression that fails with the old asymmetric fingerprint.
 The upstream rejection evidence recorder now retains a redacted, header-allowlisted private record of non-2xx Copilot inference responses when explicitly enabled; client-visible errors still never include provider response text.
-The attachment qualification remains incomplete. The retained earlier packet has one ACTUAL pass for `codex-claude-png`; its source and toolchain predate the subsequent fixes, so this is REUSED evidence for the current candidate, not a fresh final-candidate pass.
-The later bounded attempts returned HTTP 429 with `error.code: gate_dispatch_denied`. Source inspection identifies this response as a **local test-harness refusal**, emitted by `liveServerToolGate.serveHTTP` when `reserve` denies a dispatch. The persistent ledger already froze the affected cell after the earlier failure; its physical inference count did not increase during these attempts. The requests did not establish a new Copilot inference response.
-Consequently these local refusals establish neither Copilot quota exhaustion, provider throttling, nor a provider routing/protocol error. No provider reset time is known. The CLI's `unrecognized_model` diagnostic is not proof of an unsupported model either.
-One changed-evidence qualification packet then used distinct attempt keys without clearing any frozen historical entries, in Gemini, Haiku and Luna order. It made six physical inference dispatches across five cells; both Luna cells were blocked before inference after the harness lost readiness. The local-denial attempts must not be counted as physical provider dispatches.
-That packet used the previously built plugin, not the final review-fixed artifact. The matched-host suite exposed the stale artifact by observing `validated` where the corrected mandatory-tool test expected `required`. Rebuilding the plugin before rerunning the native suite resolved all six leaf failures; the fresh native suite passed. At that stage, no additional live packet had run against the final artifact.
-The changed packet re-passed Codex-to-Haiku PNG. Both Claude-to-Gemini image/PDF cells produced real Read calls and results but failed final completion and public carrier/terminal proofs. Codex-to-Gemini PNG returned the correct image answer with high detail preserved but failed the required public-terminal proof, so it remains FAILED, not accepted. Codex-to-Haiku PDF hit local HTTP 400 `attachment_request_unprepared` on a route the harness did not admit. These are unresolved qualification-harness failures, not established external provider blockers.
+The attachment qualification remains incomplete.
+The retained earlier packet has one ACTUAL pass for `codex-claude-png`; its source and toolchain predate the subsequent fixes, so this is REUSED evidence for the current candidate, not a fresh final-candidate pass.
+The later bounded attempts returned HTTP 429 with `error.code: gate_dispatch_denied`.
+Source inspection identifies this response as a **local test-harness refusal**, emitted by `liveServerToolGate.serveHTTP` when `reserve` denies a dispatch.
+The persistent ledger already froze the affected cell after the earlier failure; its physical inference count did not increase during these attempts.
+The requests did not establish a new Copilot inference response.
+Consequently these local refusals establish neither Copilot quota exhaustion, provider throttling, nor a provider routing/protocol error.
+No provider reset time is known.
+The CLI's `unrecognized_model` diagnostic is not proof of an unsupported model either.
+One changed-evidence qualification packet then used distinct attempt keys without clearing any frozen historical entries, in Gemini, Haiku and Luna order.
+It made six physical inference dispatches across five cells; both Luna cells were blocked before inference after the harness lost readiness.
+The local-denial attempts must not be counted as physical provider dispatches.
+That packet used the previously built plugin, not the final review-fixed artifact.
+The matched-host suite exposed the stale artifact by observing `validated` where the corrected mandatory-tool test expected `required`.
+Rebuilding the plugin before rerunning the native suite resolved all six leaf failures; the fresh native suite passed.
+At that stage, no additional live packet had run against the final artifact.
+The changed packet re-passed Codex-to-Haiku PNG.
+Both Claude-to-Gemini image/PDF cells produced real Read calls and results but failed final completion and public carrier/terminal proofs.
+Codex-to-Gemini PNG returned the correct image answer with high detail preserved but failed the required public-terminal proof, so it remains FAILED, not accepted.
+Codex-to-Haiku PDF hit local HTTP 400 `attachment_request_unprepared` on a route the harness did not admit.
+These are unresolved qualification-harness failures, not established external provider blockers.
 In that earlier packet, `codex-gemini-pdf` was NOT RUN because its harness cell did not yet exist.
 The earlier missing combinations and original-format multi-turn reasoning acceptance remained incomplete.
 All earlier failed verdicts remain retained without rewriting them after later harness changes.
-The PDF preflight again requires the exact previously verified rendered-page SHA-256. The attempted pixel-density substitute was removed after review because it could accept unreadable glyph substitutes and misclassify unsigned color differences. JPEG carrier checks remain separate from printed-code and final-answer acceptance.
+The PDF preflight again requires the exact previously verified rendered-page SHA-256.
+The attempted pixel-density substitute was removed after review because it could accept unreadable glyph substitutes and misclassify unsigned color differences.
+JPEG carrier checks remain separate from printed-code and final-answer acceptance.
 
 ### Final-artifact attachment packet
 
@@ -425,10 +442,15 @@ Missing terminal snapshots or inconsistent search lifecycle data return an error
 
 The follow-up review identified five cases covered by regression tests:
 
-- OAuth rotation followed by a failed account lookup retains the new token pair in pending storage. The host retries verification after restart; only a verified account can activate the pair, and the previous refresh preference is restored afterward.
-- Legacy replay migration retains the old credential fingerprint and account/auth binding when endpoint discovery is temporarily unavailable. Existing capsule authentication must prove the original endpoint; endpoint, account, or auth-ID changes cannot replay the artifact.
-- Native incomplete Responses streams retain the terminal event and partial output without caching a successful replay. Chat and Messages map supported token-limit/content-filter reasons through their existing finalization paths. The native host test covers all three client schemas.
-- Native tool declarations that the pinned SDK cannot represent use the existing exclusion metadata and headers. Forced excluded tools fail explicitly; supported function, custom, namespace, Claude web search, and local Chat shell declarations retain their existing mappings.
+- OAuth rotation followed by a failed account lookup retains the new token pair in pending storage.
+  The host retries verification after restart; only a verified account can activate the pair, and the previous refresh preference is restored afterward.
+- Legacy replay migration retains the old credential fingerprint and account/auth binding when endpoint discovery is temporarily unavailable.
+  Existing capsule authentication must prove the original endpoint; endpoint, account, or auth-ID changes cannot replay the artifact.
+- Native incomplete Responses streams retain the terminal event and partial output without caching a successful replay.
+  Chat and Messages map supported token-limit/content-filter reasons through their existing finalization paths.
+  The native host test covers all three client schemas.
+- Native tool declarations that the pinned SDK cannot represent use the existing exclusion metadata and headers.
+  Forced excluded tools fail explicitly; supported function, custom, namespace, Claude web search, and local Chat shell declarations retain their existing mappings.
 - Reasoning-only assistant carriers and mixed text/tool turns preserve reasoning before visible output at the original conversation position, using the existing SDK conversion path and tool identifiers.
 
 The affected live token-limit probe returned `response.incomplete` with `max_output_tokens`, 24 input tokens, and 16 output tokens, all used for reasoning.
@@ -438,18 +460,38 @@ HTTP/SSE native Responses, Chat, and Messages partial termination is covered; in
 Regression fixtures include the corresponding client request, upstream request, upstream response, and client response bodies.
 Private values use placeholders while the protocol fields and events remain intact.
 CPA's formatted SSE logs required reassembly at transport chunk boundaries; one lost instruction space was restored from the paired client response.
-Fixture notices record this reconstruction. Original diagnostics remain private and unchanged.
+Fixture notices record this reconstruction.
+Original diagnostics remain private and unchanged.
 
 ## Historical CPA v8.0.23 compatibility follow-up
 
 This earlier follow-up predates the current attachment and late-interrupt fixes above.
-At that point, the host and SDK were pinned to v8.0.23. Existing CPA handling now cancels an active plugin HTTP stream on `response.interrupt`, emits `response.incomplete` with reason `interrupted`, and permits the next request on the same client WebSocket. Native Codex WebSocket sessions forward the original interrupt body unchanged and retain continuation identity. These paths have required synthetic native-host regressions. After the completed plugin HTTP forwarder has exited, a late interrupt still returns HTTP 400; the native Codex completed-session handling does not extend to the plugin executor.
+At that point, the host and SDK were pinned to v8.0.23.
+Existing CPA handling now cancels an active plugin HTTP stream on `response.interrupt`, emits `response.incomplete` with reason `interrupted`, and permits the next request on the same client WebSocket.
+Native Codex WebSocket sessions forward the original interrupt body unchanged and retain continuation identity.
+These paths have required synthetic native-host regressions.
+After the completed plugin HTTP forwarder has exited, a late interrupt still returns HTTP 400; the native Codex completed-session handling does not extend to the plugin executor.
 
-Codex Responses requests can declare optional `web_search` with `external_web_access: false`. When the selected endpoint is Claude Messages, the existing native-tool exclusion mechanism now removes this unrepresentable declaration and discloses it in `X-Copilot-Excluded-Native-Tools` and response metadata. Ordinary function tools remain intact. Forced selection of the excluded tool fails before inference. This does not implement cached-only search or change it to live web search.
+Codex Responses requests can declare optional `web_search` with `external_web_access: false`.
+When the selected endpoint is Claude Messages, the existing native-tool exclusion mechanism now removes this unrepresentable declaration and discloses it in `X-Copilot-Excluded-Native-Tools` and response metadata.
+Ordinary function tools remain intact.
+Forced selection of the excluded tool fails before inference.
+This does not implement cached-only search or change it to live web search.
 
-Original Codex 0.161.0 PNG and PDF requests were rerun with full private body captures. PNG still fails before inference because its `detail: high` has no verified lossless Claude Messages mapping. The PDF initial request now reaches the provider and returns an actual rendering function call; The existing strict cancellation proof now permits continuation after a fully forwarded function-call terminal while retaining the read-cancellation record. A subsequent original renderer attempt failed because nested Seatbelt could not launch shell commands. An alternate isolated `danger-full-access` attempt avoided nesting but changed the generated search declaration to `external_web_access=true`, even with an explicit cached-search setting; Copilot refused it with HTTP 400. Those failures and every physical call remain retained. The maintained packet keeps the original `workspace-write` profile and renderer/view tools. The installed CLI rejects an external-sandbox mode; the distinct app-server policy was not substituted for the original PDF CLI route. Full PDF rendering and attachment completion remain unverified. An isolated original app-server run through the real proxy also confirms that `turn/interrupt` ends an active turn and permits another turn in the same thread, but this client version closes its WebSocket without emitting `response.interrupt`. Synthetic wire-control coverage must not be presented as an original-client interrupt frame.
+Original Codex 0.161.0 PNG and PDF requests were rerun with full private body captures.
+PNG still fails before inference because its `detail: high` has no verified lossless Claude Messages mapping.
+The PDF initial request now reaches the provider and returns an actual rendering function call; The existing strict cancellation proof now permits continuation after a fully forwarded function-call terminal while retaining the read-cancellation record.
+A subsequent original renderer attempt failed because nested Seatbelt could not launch shell commands.
+An alternate isolated `danger-full-access` attempt avoided nesting but changed the generated search declaration to `external_web_access=true`, even with an explicit cached-search setting; Copilot refused it with HTTP 400.
+Those failures and every physical call remain retained.
+The maintained packet keeps the original `workspace-write` profile and renderer/view tools.
+The installed CLI rejects an external-sandbox mode; the distinct app-server policy was not substituted for the original PDF CLI route.
+Full PDF rendering and attachment completion remain unverified.
+An isolated original app-server run through the real proxy also confirms that `turn/interrupt` ends an active turn and permits another turn in the same thread, but this client version closes its WebSocket without emitting `response.interrupt`.
+Synthetic wire-control coverage must not be presented as an original-client interrupt frame.
 
-Cross-format image detail that Claude Messages cannot preserve returns a local HTTP 422 with code `unsupported_image_detail` and includes the destination endpoint and requested detail. The request retains its original image bytes; the adapter does not downgrade the detail to `auto`.
+Cross-format image detail that Claude Messages cannot preserve returns a local HTTP 422 with code `unsupported_image_detail` and includes the destination endpoint and requested detail.
+The request retains its original image bytes; the adapter does not downgrade the detail to `auto`.
 
 ## Historical WebSocket interrupt limitation
 
@@ -523,7 +565,9 @@ A broader supplemental native suite exposed an existing `TestNativeHostResponses
 That supplemental failure remains outside this validation unit.
 Temporary client homes, authentication files, host configuration, and host processes were removed after the live checks.
 
-The follow-up recorded 11 additional inference, six authentication and six catalogue dispatches, bringing expanded totals to 38, 20 and 16. One alternate-profile retry occurred before the intended cached-setting edit matched the generated config; its repeated 400 and a separate private correction record are retained. These are measured counts, not limits.
+The follow-up recorded 11 additional inference, six authentication and six catalogue dispatches, bringing expanded totals to 38, 20 and 16.
+One alternate-profile retry occurred before the intended cached-setting edit matched the generated config; its repeated 400 and a separate private correction record are retained.
+These are measured counts, not limits.
 
 ## Loading an existing live artifact in place
 

@@ -23,11 +23,16 @@ The earlier startup race and NOTRUN snapshot below are historical.
 
 The completion audit and [denied live-access record](live-acceptance-status.md) separate current source validation from fresh provider acceptance, which is NOT RUN after the sealed request was not granted.
 
-[PR #36](https://github.com/ririnto/cpa-copilot-bridge/pull/36) completes the representable Claude-origin hosted-search round trip into Responses, retaining completed result ownership and history. This is conversion support; it does not change the recorded live Haiku WebSearch refusal or establish that the provider executes that tool.
+[PR #36](https://github.com/ririnto/cpa-copilot-bridge/pull/36) completes the representable Claude-origin hosted-search round trip into Responses, retaining completed result ownership and history.
+This is conversion support; it does not change the recorded live Haiku WebSearch refusal or establish that the provider executes that tool.
 
-[PR #41](https://github.com/ririnto/cpa-copilot-bridge/pull/41) preserves strict Chat request semantics and refuses hosted state before dispatch when the destination cannot retain it. Complete hosted search from Chat to Responses remains explicitly unsupported until a lossless destination carrier exists. Claude Bash to Responses is also explicitly unsupported because no lossless equivalent execution/history contract is established.
+[PR #41](https://github.com/ririnto/cpa-copilot-bridge/pull/41) preserves strict Chat request semantics and refuses hosted state before dispatch when the destination cannot retain it.
+Complete hosted search from Chat to Responses remains explicitly unsupported until a lossless destination carrier exists.
+Claude Bash to Responses is also explicitly unsupported because no lossless equivalent execution/history contract is established.
 
-[PR #44](https://github.com/ririnto/cpa-copilot-bridge/pull/44) preserves standard Responses URL citations in Chat JSON, including exact text, URL/title and composed character positions. A standard streaming annotation carrier is not established. These bridge implementation states do not upgrade any provider-side acceptance result.
+[PR #44](https://github.com/ririnto/cpa-copilot-bridge/pull/44) preserves standard Responses URL citations in Chat JSON, including exact text, URL/title and composed character positions.
+A standard streaming annotation carrier is not established.
+These bridge implementation states do not upgrade any provider-side acceptance result.
 
 The successful GPT continuation uses the original stream's identical public/client completed terminal.
 That terminal contains meaningful search results and an exactly matching source citation.
@@ -71,7 +76,8 @@ A distinct original Claude structured-stdin URL carrier reached exact Haiku nati
 Copilot returned HTTP 400 `external image URLs are not supported`; the client wire retained the corresponding 400 error.
 This is a URL-only profile rejection, since the original Messages URL source has no independent MIME/detail fields.
 The first duplicate-path harness 404 made zero inference; the corrected attempt made one, with later automatic retries denied locally before turn interruption.
-A complete final CLI result was not observed. The retained provider rejection is not retried unchanged.
+A complete final CLI result was not observed.
+The retained provider rejection is not retried unchanged.
 The maintained harness corrects the root origin, always applies the child sandbox, disables client retries, streams private output captures and validates joined client lifecycles.
 Required synthetic wire tests cover active and late control handling separately.
 
@@ -82,7 +88,8 @@ The historical Read-cycle capture instead answers both red, while the native GPT
 No bridge-side output correction is justified by these captures.
 The original HTTPS harness did have a separate prompt/oracle defect: it asked for left/right colors on a red-top, blue-bottom fixture.
 The maintained prompt now uses top/bottom and its regression checks the actual PNG geometry.
-The Codex client rejection remains immutable. The separate Claude URL-only profile is now a provider rejection; broader URL/MIME/detail acceptance remains unmet.
+The Codex client rejection remains immutable.
+The separate Claude URL-only profile is now a provider rejection; broader URL/MIME/detail acceptance remains unmet.
 
 ## Remaining inputs and owners
 
@@ -267,7 +274,8 @@ Ordinary client functions with server-tool names retain their client execution s
 
 Incoming Claude `server_tool_use` history cannot use the ordinary function-call adapter.
 [PR #15](https://github.com/ririnto/cpa-copilot-bridge/pull/15) adds completed Claude-compatible hosted-search history from Responses to destination-native Messages, preserving tool ownership and complete history for supported shapes.
-Completed Claude WebSearch call/result/history input targeting Responses is supported by PR #36 with authentic ownership and opaque replay values. Complete hosted state targeting Chat and Claude Bash targeting Responses remain explicitly rejected.
+Completed Claude WebSearch call/result/history input targeting Responses is supported by PR #36 with authentic ownership and opaque replay values.
+Complete hosted state targeting Chat and Claude Bash targeting Responses remain explicitly rejected.
 The request adapter also rejects unsupported Bash history, incomplete search pairing and opaque replay state that cannot be represented without invention.
 CPA's built-in response conversion preserves actual paired search results and replay tokens when present.
 Offline/native regression checks establish the supported completed-search conversion and zero-dispatch rejection; they do not establish a fresh original-client provider conversion pass or general cross-format hosted-tool parity.
@@ -370,11 +378,23 @@ Ordinary tests cover strict terminal schemas, ordered content-block lifecycles, 
 
 ## Historical CPA v8.0.23 Codex follow-up
 
-The earlier cached-only-search 422 is historical. The existing native-tool exclusion mechanism now excludes optional Responses search with `external_web_access=false` when targeting Messages, retaining ordinary functions and disclosing the exclusion. Forced excluded selection still fails before inference. Original request and paired response bodies are retained in a portable regression fixture; they do not establish clean EOF for the historical capture.
+The earlier cached-only-search 422 is historical.
+The existing native-tool exclusion mechanism now excludes optional Responses search with `external_web_access=false` when targeting Messages, retaining ordinary functions and disclosing the exclusion.
+Forced excluded selection still fails before inference.
+Original request and paired response bodies are retained in a portable regression fixture; they do not establish clean EOF for the historical capture.
 
-The original Codex app-server was also run against the real isolated proxy with a loopback WebSocket recorder. Active interruption and a completed same-thread follow-up answer passed. The client closed the active socket and emitted no `response.interrupt` frame. The required native-host test separately exercises unchanged control-frame forwarding, plugin HTTP cancellation and same-socket continuation using CPA's existing implementation. After plugin forwarder cleanup, a late control frame remains unsupported.
+The original Codex app-server was also run against the real isolated proxy with a loopback WebSocket recorder.
+Active interruption and a completed same-thread follow-up answer passed.
+The client closed the active socket and emitted no `response.interrupt` frame.
+The required native-host test separately exercises unchanged control-frame forwarding, plugin HTTP cancellation and same-socket continuation using CPA's existing implementation.
+After plugin forwarder cleanup, a late control frame remains unsupported.
 
-Codex PDF preparation keeps the original renderer and `view_image` tools. The original workspace-write CLI cannot launch nested Seatbelt inside the task-owned outer loopback-only sandbox. An alternate inner danger-full-access profile generates live search despite an explicit cached setting and receives the provider's HTTP 400. The installed CLI has no external-restricted sandbox mode, so the maintained packet retains workspace-write and full PDF completion remains unverified. Operating client settings remain unchanged. High image-detail semantics still have no verified lossless Messages representation.
+Codex PDF preparation keeps the original renderer and `view_image` tools.
+The original workspace-write CLI cannot launch nested Seatbelt inside the task-owned outer loopback-only sandbox.
+An alternate inner danger-full-access profile generates live search despite an explicit cached setting and receives the provider's HTTP 400.
+The installed CLI has no external-restricted sandbox mode, so the maintained packet retains workspace-write and full PDF completion remains unverified.
+Operating client settings remain unchanged.
+High image-detail semantics still have no verified lossless Messages representation.
 
 ## Native producer boundary
 
