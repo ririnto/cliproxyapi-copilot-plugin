@@ -7,7 +7,7 @@ Unsupported responses, excluded declarations, client-executed functions, and unr
 
 ## Current acceptance (2026-10-11)
 
-The latest matched host and dependency checks are described in [current live validation](live-copilot-validation.md#current-validation-2026-10-11).
+The latest matched host and dependency checks are described in [current live validation](live-copilot-validation.md#current-validation-2026-10-16).
 The corrected model-registry startup and five native JSON probes completed.
 The earlier startup race and NOTRUN snapshot below are historical.
 

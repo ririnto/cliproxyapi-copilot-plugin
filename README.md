@@ -273,7 +273,8 @@ Start it from the management UI or `/v0/management/anthropic-auth-url`.
 
 Anthropic's fixed redirect is `localhost:54545`.
 This stack intentionally does not map that host port.
-**Do not complete this flow in a browser on the current host if port 54545 belongs to the existing deployment.** To keep that deployment untouched, use a separate workstation/browser environment where localhost:54545 is unused, copy the final redirect URL after authorization, and submit it to the new stack's official manual callback endpoint:
+**Do not complete this flow in a browser on the current host if port 54545 belongs to the existing deployment.**
+To keep that deployment untouched, use a separate workstation/browser environment where localhost:54545 is unused, copy the final redirect URL after authorization, and submit it to the new stack's official manual callback endpoint:
 
 ```sh
 curl -X POST \
