@@ -14,11 +14,9 @@ cd cliproxyapi-copilot-plugin
 make prepare-runtime-host
 ```
 
-This builds the plugin library and matching Linux `amd64` server from the
-versioned host replacement selected by `go.mod`.
-Docker Engine is required because the build uses the `golang:1-bookworm`
-container. Docker Compose v2 is required only when using the Compose deployment
-steps below.
+This builds the plugin library and matching Linux `amd64` server from the versioned host replacement selected by `go.mod`.
+Docker Engine is required because the build uses the `golang:1-bookworm` container.
+Docker Compose v2 is required only when using the Compose deployment steps below.
 The outputs are:
 
 ```text
@@ -33,15 +31,12 @@ go list -mod=readonly -m -json github.com/router-for-me/CLIProxyAPI/v8
 ```
 
 Use the `Replace.Path` and `Replace.Version` fields as the required host source.
-The release archive records the same selected identity in
-`cliproxyapi-copilot.host-requirements.json` alongside the required
-`host.payload.finalize` callback.
+The release archive records the same selected identity in `cliproxyapi-copilot.host-requirements.json` alongside the required `host.payload.finalize` callback.
 The JSON is deployment metadata.
 The plugin loader does not read it or replace the server automatically.
 
-The filename is significant: CLIProxyAPI derives the plugin ID
-`cliproxyapi-copilot` from it. Do not rename the library unless the matching key
-under `plugins.configs` is also renamed.
+The filename is significant: CLIProxyAPI derives the plugin ID `cliproxyapi-copilot` from it.
+Do not rename the library unless the matching key under `plugins.configs` is also renamed.
 
 ## 2. Install the plugin and paired host
 
@@ -59,10 +54,9 @@ sudo install -m 0755 \
   /opt/cliproxyapi/plugins/linux/amd64/cliproxyapi-copilot.so
 ```
 
-The CLIProxyAPI process must be able to read the library. Use a different
-absolute directory if `/opt/cliproxyapi` does not match the deployment.
-Install the matching server beside the existing binary, then configure the
-service to launch it during a planned deployment update.
+The CLIProxyAPI process must be able to read the library.
+Use a different absolute directory if `/opt/cliproxyapi` does not match the deployment.
+Install the matching server beside the existing binary, then configure the service to launch it during a planned deployment update.
 Keep the current binary as the rollback copy.
 
 ```bash
@@ -72,9 +66,7 @@ sudo install -m 0755 \
   /opt/cliproxyapi/bin/cli-proxy-api-copilot
 ```
 
-Update the service's executable path to
-`/opt/cliproxyapi/bin/cli-proxy-api-copilot`, then restart CLIProxyAPI using
-the deployment's normal service procedure.
+Update the service's executable path to `/opt/cliproxyapi/bin/cli-proxy-api-copilot`, then restart CLIProxyAPI using the deployment's normal service procedure.
 
 ### Docker or Docker Compose
 
@@ -108,8 +100,7 @@ services:
 
 The server path above matches the official image used by this repository.
 Check the entrypoint path before using a different image.
-Merge both mounts into the existing service rather than replacing its current
-configuration and auth-volume mounts.
+Merge both mounts into the existing service rather than replacing its current configuration and auth-volume mounts.
 
 ## 3. Merge the plugin configuration
 
@@ -143,9 +134,9 @@ plugins:
   dir: "/CLIProxyAPI/plugins"
 ```
 
-There must be only one top-level `plugins` key. Preserve other entries already
-present under `plugins.configs`. Global `plugins.enabled` and the individual
-`cliproxyapi-copilot.enabled` setting must both be `true`.
+There must be only one top-level `plugins` key.
+Preserve other entries already present under `plugins.configs`.
+Global `plugins.enabled` and the individual `cliproxyapi-copilot.enabled` setting must both be `true`.
 
 The `oauth.auth-dir` directory must be writable and persistent.
 CLIProxyAPI stores the plugin's GitHub OAuth credential there.
@@ -284,7 +275,8 @@ The custom provider above uses HTTP/SSE and fetches the proxy catalog.
 
 ## 4. Restart and authenticate
 
-Restart CLIProxyAPI using the deployment's normal service command. Examples:
+Restart CLIProxyAPI using the deployment's normal service command.
+Examples:
 
 ```bash
 sudo systemctl restart cliproxyapi
@@ -301,9 +293,8 @@ plugin loaded plugin_id=cliproxyapi-copilot
 plugin registered plugin_id=cliproxyapi-copilot
 ```
 
-Open the existing CLIProxyAPI management center, start the **Copilot** login,
-and complete GitHub's device-code flow. The login uses the deployment's normal
-management authentication and auth directory.
+Open the existing CLIProxyAPI management center, start the **Copilot** login, and complete GitHub's device-code flow.
+The login uses the deployment's normal management authentication and auth directory.
 
 ## 5. Verify the installation
 
@@ -315,8 +306,7 @@ curl -fsS \
   http://127.0.0.1:8317/v0/management/plugins
 ```
 
-After Copilot authentication, query the normal model endpoint with an existing
-CLIProxyAPI client key:
+After Copilot authentication, query the normal model endpoint with an existing CLIProxyAPI client key:
 
 ```bash
 curl -fsS \
@@ -329,14 +319,11 @@ Existing Claude and other provider models remain available.
 
 ## Updating or removing the plugin
 
-Version tags automatically publish marketplace-compatible packages. To update
-from a release, verify the plugin archive against `checksums.txt` and inspect
-`cliproxyapi-copilot.host-requirements.json` for the required host module
-identity. In a source checkout at the same release tag, run
-`make prepare-runtime-host` to build the matching plugin and host from that
-release's `go.mod`. Install both outputs using the procedures in step 2, then
-restart CLIProxyAPI so it loads the matching pair. The release archive does
-not replace the host binary automatically.
+Version tags automatically publish marketplace-compatible packages.
+To update from a release, verify the plugin archive against `checksums.txt` and inspect `cliproxyapi-copilot.host-requirements.json` for the required host module identity.
+In a source checkout at the same release tag, run `make prepare-runtime-host` to build the matching plugin and host from that release's `go.mod`.
+Install both outputs using the procedures in step 2, then restart CLIProxyAPI so it loads the matching pair.
+The release archive does not replace the host binary automatically.
 
 To disable it without deleting credentials:
 
@@ -347,7 +334,5 @@ plugins:
       enabled: false
 ```
 
-To remove it completely, stop CLIProxyAPI, delete the installed library, remove
-only the `cliproxyapi-copilot` configuration entry, and restart. Delete the
-plugin's Copilot auth entry through the normal management UI only if the stored
-credential should also be revoked or removed.
+To remove it completely, stop CLIProxyAPI, delete the installed library, remove only the `cliproxyapi-copilot` configuration entry, and restart.
+Delete the plugin's Copilot auth entry through the normal management UI only if the stored credential should also be revoked or removed.
