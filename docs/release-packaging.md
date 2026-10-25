@@ -1,0 +1,100 @@
+# Package release artifacts
+
+The release workflows package two targets:
+
+| Target | Plugin library | Archive |
+| --- | --- | --- |
+| `linux/amd64` | `cliproxyapi-copilot.so` | `cliproxyapi-copilot_<version>_linux_amd64.zip` |
+| `darwin/arm64` | `cliproxyapi-copilot.dylib` | `cliproxyapi-copilot_<version>_darwin_arm64.zip` |
+
+The release workflow builds the macOS ARM64 package on the `macos-15` runner.
+Each archive contains its plugin library at the ZIP root. A package command
+writes the SHA-256 digest of its exact ZIP to `dist/checksums.txt`. The release
+workflow combines both target lines in the release's `checksums.txt`.
+
+## Run the package tests offline
+
+The package tests use temporary fixture libraries. They do not build or load a
+CLIProxyAPI plugin and do not need Go modules.
+
+Run:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 GOPROXY=off GOSUMDB=off python3 -m unittest discover -s scripts -p 'test_package_release.py' -v
+```
+
+The tests create the Linux and macOS archive names, check each archive's
+top-level library and contents, and compare the recorded checksum with the
+SHA-256 of the complete ZIP file. They also require an unsupported target to
+fail before artifact lookup.
+
+## Build a release package
+
+Use Python 3.8 or newer to package either target. Build the macOS archive on an
+ARM64 macOS host with Go `1.26.x` and Xcode Command Line Tools for cgo. Build
+the Linux archive with Docker and the `golang:1.26-bookworm` image.
+
+To build the macOS package for version `0.3.3`, set `CC=/usr/bin/clang` so cgo
+uses Xcode Command Line Tools' compiler when another `clang` appears earlier on
+`PATH`:
+
+```sh
+GOMODCACHE="$PWD/.cache/go-mod" GOCACHE="$PWD/.cache/go-build" \
+GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CC=/usr/bin/clang \
+make package-darwin VERSION=0.3.3
+```
+
+The command creates
+`dist/cliproxyapi-copilot_0.3.3_darwin_arm64.zip`. The ZIP contains
+`cliproxyapi-copilot.dylib`, and `dist/checksums.txt` contains its SHA-256
+digest.
+
+To build the Linux package for the same version, run:
+
+```sh
+GOPROXY=off GOSUMDB=off make package VERSION=0.3.3
+```
+
+The command creates
+`dist/cliproxyapi-copilot_0.3.3_linux_amd64.zip`. The ZIP contains
+`cliproxyapi-copilot.so`.
+
+## Provision Go dependencies
+
+The package tests need no Go modules. Go tests, vet, and builds need every
+module in the checked-in `go.mod` and `go.sum`.
+
+Use Go `1.26.x` and provision the module cache before disabling network access.
+Keep checksum verification enabled during setup:
+
+```sh
+GOMODCACHE="$PWD/.cache/go-mod" GOTOOLCHAIN=local GOSUMDB=sum.golang.org go mod download
+```
+
+Run the uncached tests and vet offline with the same module cache:
+
+```sh
+GOMODCACHE="$PWD/.cache/go-mod" GOCACHE="$PWD/.cache/go-build" \
+GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CC=/usr/bin/clang \
+go test -count=1 ./...
+GOMODCACHE="$PWD/.cache/go-mod" GOCACHE="$PWD/.cache/go-build" \
+GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local CC=/usr/bin/clang \
+go vet ./...
+```
+
+Tests exit successfully with `ok` for packages with tests and `[no test files]`
+for packages without tests. `go vet` exits successfully without diagnostics.
+The macOS `CC` setting selects Xcode Command Line Tools' compiler when a
+third-party `clang` appears earlier on `PATH`.
+
+For an offline Linux build, provision the module cache mounted into Docker and
+pull the Go image before disabling network access:
+
+```sh
+GOMODCACHE="$PWD/.cache/go-mod" GOTOOLCHAIN=local GOSUMDB=sum.golang.org go mod download
+docker pull golang:1.26-bookworm
+```
+
+Then rerun the matching package command with `GOPROXY=off GOSUMDB=off`. The
+Linux build passes those settings into Docker. A build fails rather than
+fetching modules if its cache is incomplete.

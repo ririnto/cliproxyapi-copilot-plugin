@@ -123,15 +123,17 @@ git push origin v0.3.1
 ```
 
 The release workflow builds with the tag version embedded in plugin metadata
-and publishes:
+and publishes these files:
 
 ```text
 cliproxyapi-copilot_0.3.1_linux_amd64.zip
+cliproxyapi-copilot_0.3.1_darwin_arm64.zip
 checksums.txt
 ```
 
-The ZIP contains only `cliproxyapi-copilot.so` at its root, matching the
+The Linux ZIP contains only `cliproxyapi-copilot.so` at its root, matching the
 official CLIProxyAPI Plugins Store requirements.
+The macOS ARM64 ZIP contains only `cliproxyapi-copilot.dylib` at its root.
 
 ## Isolated deployment
 
