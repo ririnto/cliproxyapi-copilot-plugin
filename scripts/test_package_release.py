@@ -62,5 +62,30 @@ class PackageReleaseTest(unittest.TestCase):
         self.assertIn("unsupported target", result.stderr)
 
 
+class ReleaseVersionTest(unittest.TestCase):
+    def test_supported_dotted_numeric_versions_are_returned(self):
+        for version in ("1.2.3", "1.2.3.4"):
+            with self.subTest(version=version):
+                result = subprocess.run(
+                    ["sh", str(SCRIPT), "--validate-version", version],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, f"{version}\n")
+
+    def test_shell_metacharacters_are_rejected_before_make(self):
+        result = subprocess.run(
+            ["sh", str(SCRIPT), "--validate-version", '1.2.3";id;#'],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("version must be dotted numeric", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

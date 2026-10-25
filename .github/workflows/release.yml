@@ -21,8 +21,19 @@ jobs:
           go-version: "1.26.x"
           cache: true
 
+      - name: Validate release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          version="$(scripts/package-release.sh --validate-version "$version")"
+          printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
       - name: Build and package production plugin
-        run: make package-darwin VERSION="${GITHUB_REF_NAME#v}"
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: make package-darwin VERSION="$VERSION"
 
       - name: Upload package
         uses: actions/upload-artifact@v4
@@ -47,12 +58,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=${GITHUB_REF_NAME#v}
-          if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
-            echo "Invalid release tag: $GITHUB_REF_NAME" >&2
-            exit 1
-          fi
-          echo "value=$version" >> "$GITHUB_OUTPUT"
+          version="${GITHUB_REF_NAME#v}"
+          version="$(scripts/package-release.sh --validate-version "$version")"
+          printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Run tests
         run: |

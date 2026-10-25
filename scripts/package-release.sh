@@ -3,8 +3,16 @@ set -eu
 
 VERSION=${1:-}
 PLUGIN_ID="cliproxyapi-copilot"
-GOOS=${2:-linux}
-GOARCH=${3:-amd64}
+VALIDATE_ONLY=false
+if [ "$VERSION" = "--validate-version" ]; then
+  VERSION=${2:-}
+  GOOS=linux
+  GOARCH=amd64
+  VALIDATE_ONLY=true
+else
+  GOOS=${2:-linux}
+  GOARCH=${3:-amd64}
+fi
 
 case "$VERSION" in
   "" | *[!0-9.]* | .* | *. | *..*)
@@ -28,6 +36,10 @@ case "$GOOS/$GOARCH" in
     exit 1
     ;;
 esac
+if [ "$VALIDATE_ONLY" = true ]; then
+  printf '%s\n' "$VERSION"
+  exit 0
+fi
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
