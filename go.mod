@@ -8,8 +8,8 @@ require (
 	github.com/router-for-me/CLIProxyAPI/v8 v8.0.30
 	github.com/tidwall/gjson v1.20.0
 	github.com/tidwall/sjson v1.2.5
-	github.com/tiktoken-go/tokenizer v0.8.1
-	golang.org/x/net v0.61.0
+	github.com/tiktoken-go/tokenizer v0.10.0
+	golang.org/x/net v0.62.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

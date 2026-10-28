@@ -76,3 +76,27 @@ jobs:
             dist/cliproxyapi-copilot_0.0.0_linux_amd64.zip
             dist/checksums.txt
           if-no-files-found: error
+
+  package-darwin:
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and package production plugin
+        run: make package-darwin VERSION=0.0.0
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: cliproxyapi-copilot-darwin-arm64
+          path: |
+            dist/cliproxyapi-copilot_0.0.0_darwin_arm64.zip
+            dist/checksums.txt
+          if-no-files-found: error
