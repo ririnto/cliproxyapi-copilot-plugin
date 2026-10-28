@@ -52,6 +52,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Validate release tag
         id: version
@@ -87,17 +89,20 @@ jobs:
 
       - name: Combine package checksums
         run: |
-          cat dist/checksums.txt dist/darwin/checksums.txt > dist/checksums-all.txt
-          mv dist/checksums-all.txt dist/checksums.txt
+          cat dist/darwin/checksums.txt >> dist/checksums.txt
+          mv dist/darwin/cliproxyapi-copilot_${{ steps.version.outputs.value }}_darwin_arm64.zip dist/
 
-      - name: Publish GitHub Release
+      - name: Validate release Git state
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" \
-            dist/cliproxyapi-copilot_${{ steps.version.outputs.value }}_linux_amd64.zip \
-            dist/darwin/cliproxyapi-copilot_${{ steps.version.outputs.value }}_darwin_arm64.zip \
-            dist/checksums.txt \
-            --verify-tag \
-            --generate-notes \
-            --title "$GITHUB_REF_NAME"
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: packaging/validate-release-git.sh
+
+      - name: Publish GitHub Release with GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.18.3
+          args: release --clean --skip=validate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}

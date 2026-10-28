@@ -1,0 +1,57 @@
+version: "3"
+
+tasks:
+  build:
+    desc: Build the Linux plugin in Docker
+    cmds:
+      - make build {{.CLI_ARGS}}
+
+  build-local:
+    desc: Build the Linux plugin locally
+    cmds:
+      - make build-local {{.CLI_ARGS}}
+
+  build-darwin:
+    desc: Build the macOS plugin
+    cmds:
+      - make build-darwin {{.CLI_ARGS}}
+
+  test:
+    desc: Run Go and Python tests
+    cmds:
+      - make test {{.CLI_ARGS}}
+
+  test-native:
+    desc: Run native host integration tests
+    cmds:
+      - make test-native {{.CLI_ARGS}}
+
+  check:
+    desc: Run contributor checks
+    cmds:
+      - pnpm run check
+
+  fix:
+    desc: Run contributor formatters and fixes
+    cmds:
+      - pnpm run fix
+
+  package:
+    desc: Build and package the Linux plugin
+    cmds:
+      - make package {{.CLI_ARGS}}
+
+  package-darwin:
+    desc: Build and package the macOS plugin
+    cmds:
+      - make package-darwin {{.CLI_ARGS}}
+
+  prepare-runtime-host:
+    desc: Prepare the runtime host
+    cmds:
+      - make prepare-runtime-host {{.CLI_ARGS}}
+
+  clean:
+    desc: Remove build artifacts and caches
+    cmds:
+      - make clean {{.CLI_ARGS}}
