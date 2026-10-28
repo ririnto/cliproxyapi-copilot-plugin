@@ -188,16 +188,19 @@ git tag v0.3.1
 git push origin v0.3.1
 ```
 
-The release workflow builds with the tag version embedded in plugin metadata and publishes:
+The release workflow builds with the tag version embedded in plugin metadata
+and publishes these files:
 
 ```text
 cliproxyapi-copilot_0.3.1_linux_amd64.zip
+cliproxyapi-copilot_0.3.1_darwin_arm64.zip
 checksums.txt
 ```
 
-The ZIP contains `cliproxyapi-copilot.so` and `cliproxyapi-copilot.host-requirements.json` at its root.
-The shared library matches the official CLIProxyAPI Plugins Store requirements.
-The JSON records the required host callback and paired host module source.
+The Linux ZIP contains `cliproxyapi-copilot.so` and the macOS ARM64 ZIP contains
+`cliproxyapi-copilot.dylib`. Each ZIP also contains
+`cliproxyapi-copilot.host-requirements.json` at its root. The JSON records the
+required host callback and paired host module source.
 
 ## Isolated deployment
 
