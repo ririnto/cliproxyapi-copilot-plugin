@@ -112,5 +112,53 @@ class ReleaseVersionTest(unittest.TestCase):
         self.assertIn("version must be dotted numeric", result.stderr)
 
 
+class ReleaseGitValidationTest(unittest.TestCase):
+    def test_dotted_tag_requires_clean_worktree_and_exact_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            packaging = root / "packaging"
+            packaging.mkdir()
+            for name in ("package-release.sh", "validate-release-git.sh"):
+                (packaging / name).write_bytes(SCRIPT.with_name(name).read_bytes())
+                (packaging / name).chmod(0o755)
+            env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            env.update({
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_AUTHOR_NAME": "Release Test",
+                "GIT_AUTHOR_EMAIL": "release@example.invalid",
+                "GIT_COMMITTER_NAME": "Release Test",
+                "GIT_COMMITTER_EMAIL": "release@example.invalid",
+            })
+            def git(*args):
+                return subprocess.run(
+                    ["git", *args], cwd=root, env=env, check=True, capture_output=True, text=True
+                )
+            git("init", "-q")
+            git("add", "packaging")
+            git("commit", "-qm", "release")
+            git("tag", "v1.2.3.4")
+            git("tag", "v1.2.3")
+            def validate(tag):
+                return subprocess.run(
+                    ["sh", "packaging/validate-release-git.sh"],
+                    cwd=root, env={**env, "RELEASE_TAG": tag},
+                    check=False, capture_output=True, text=True,
+                )
+            self.assertEqual(validate("v1.2.3.4").returncode, 0)
+            self.assertEqual(validate("v1.2.3").returncode, 0)
+            self.assertNotEqual(validate("v1.2.4").returncode, 0)
+            self.assertNotEqual(validate("v1.2.3.4-invalid").returncode, 0)
+            original = (packaging / "package-release.sh").read_bytes()
+            (packaging / "package-release.sh").write_bytes(original + b"\n")
+            self.assertNotEqual(validate("v1.2.3.4").returncode, 0)
+            (packaging / "package-release.sh").write_bytes(original)
+            (root / "untracked").write_text("dirty")
+            self.assertNotEqual(validate("v1.2.3.4").returncode, 0)
+            git("add", "untracked")
+            git("commit", "-qm", "next")
+            self.assertNotEqual(validate("v1.2.3.4").returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

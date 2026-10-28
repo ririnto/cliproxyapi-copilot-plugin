@@ -39,6 +39,10 @@ Use a dotted numeric `RELEASE_VERSION` without a leading `v`.
 The tagged GitHub workflow runs the same verification hook on packages built by its two jobs.
 It sets `RELEASE_VERSION` from the validated tag and leaves `RELEASE_BUILD_PACKAGES` unset.
 GoReleaser then publishes the ZIPs and checksums with GitHub-generated release notes.
+The workflow accepts dotted numeric tags with more than three components.
+GoReleaser's semver validation does not accept those tags, so the workflow uses
+`--skip=validate` after `packaging/validate-release-git.sh` checks the numeric tag,
+clean worktree, and exact tag at HEAD. These replace its skipped Git checks.
 The isolated `tools` module also pins Task.
 Run its tasks from the repository root with `go -C tools tool task --dir ..`.
 
