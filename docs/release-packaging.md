@@ -7,12 +7,40 @@ The release workflows package two targets:
 | `linux/amd64` | `cliproxyapi-copilot.so` | `cliproxyapi-copilot_<version>_linux_amd64.zip` |
 | `darwin/arm64` | `cliproxyapi-copilot.dylib` | `cliproxyapi-copilot_<version>_darwin_arm64.zip` |
 
-The release workflow builds the macOS ARM64 package on the `macos-15` runner.
+The release workflow builds the macOS ARM64 package on the `macos-15` runner
+and the Linux AMD64 package in Docker.
 Each archive contains its plugin library and `cliproxyapi-copilot.host-requirements.json`
 at the ZIP root. The metadata records the required host callback and the selected
 published host module. A package command
 writes the SHA-256 digest of its exact ZIP to `dist/checksums.txt`. The release
 workflow combines both target lines in the release's `checksums.txt`.
+GoReleaser verifies the packages and publishes them with the checksum file.
+It uses the existing package script for the ZIP contents and metadata.
+
+## Run a release snapshot
+
+On an ARM64 Mac with Docker, the Go version in `tools/go.mod`, and Xcode Command Line Tools,
+build the pinned GoReleaser executable and run it from the repository root:
+
+```sh
+mkdir -p .cache/tools
+CC=/usr/bin/clang go -C tools build -o ../.cache/tools/goreleaser github.com/goreleaser/goreleaser/v2
+RELEASE_VERSION=0.0.0 RELEASE_BUILD_PACKAGES=1 CC=/usr/bin/clang \
+.cache/tools/goreleaser release --snapshot --clean
+```
+
+The preparation hook runs `make package` and `make package-darwin`.
+It combines and verifies both SHA-256 digests before GoReleaser continues.
+The ZIPs and `checksums.txt` remain in `dist/`.
+GoReleaser writes its own snapshot metadata under `.cache/goreleaser-dist/`.
+Snapshot mode skips publishing and does not test GitHub release creation.
+Use a dotted numeric `RELEASE_VERSION` without a leading `v`.
+
+The tagged GitHub workflow runs the same verification hook on packages built by its two jobs.
+It sets `RELEASE_VERSION` from the validated tag and leaves `RELEASE_BUILD_PACKAGES` unset.
+GoReleaser then publishes the ZIPs and checksums with GitHub-generated release notes.
+The isolated `tools` module also pins Task.
+Run its tasks from the repository root with `go -C tools tool task --dir ..`.
 
 ## Run the package tests offline
 
