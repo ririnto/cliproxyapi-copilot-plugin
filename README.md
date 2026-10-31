@@ -8,6 +8,8 @@ To add the plugin and its required paired host to an existing CLIProxyAPI instal
 
 For feature-by-feature implementation, validation and external acceptance limits, see [`docs/feature-completion.md`](docs/feature-completion.md).
 
+For conversion contracts and the boundary between the plugin and the proxy, see [`docs/protocol-conversion.md`](docs/protocol-conversion.md).
+
 GitHub Copilot subscription plugin built against the official `router-for-me/CLIProxyAPI` v8.0.30 SDK and plugin ABI version 1.
 Runtime requests require the paired maintained host selected by `go.mod`.
 The official v8.0.30 server lacks the required `host.payload.finalize` callback.
